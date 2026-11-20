@@ -1,12 +1,13 @@
 // Freigang service worker: offline shell + Web Push. Never touches /api.
-const CACHE = 'freigang-v1';
+const VERSION = '1.1.0'; // same as src/version.js; a new version means a fresh cache
+const CACHE = 'freigang-' + VERSION;
 const SHELL = ['/', '/app.js', '/style.css', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/apple-touch-icon.png', '/icons/icon.svg', '/icons/favicon-32.png',
   '/img/ilford-head.svg', '/img/bonnie-head.svg', '/img/ilford-curled.svg', '/img/bonnie-curled.svg', '/img/ilford-sitting.svg', '/img/bonnie-sitting.svg',
   '/fonts/dm-sans-latin-400-normal.woff2', '/fonts/dm-sans-latin-500-normal.woff2', '/fonts/dm-sans-latin-600-normal.woff2', '/fonts/dm-sans-latin-700-normal.woff2',
   '/fonts/fraunces-latin-500-normal.woff2', '/fonts/fraunces-latin-600-normal.woff2'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

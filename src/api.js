@@ -6,6 +6,7 @@ import { notifyUser } from './push.js';
 import { buildLog, todayStrip } from './stats.js';
 import { lastEvents, eventsSince } from './db.js';
 import { normalize, overlapsWeek } from './slots.js';
+import { VERSION } from './version.js';
 
 const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -57,6 +58,7 @@ async function buildState(env, me, now) {
     today: todayStrip({ events: ev, now, tz }),
     quietHours: { start: numVar(env.QUIET_START, 22), end: numVar(env.QUIET_END, 6) },
     vapidPublicKey: env.VAPID_PUBLIC_KEY || '',
+    version: VERSION,
   };
 }
 
