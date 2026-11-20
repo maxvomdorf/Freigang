@@ -1,0 +1,22 @@
+{
+  "name": "freigang",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Freigang: shared in/out status and log for two neighbouring cats (Ilford and Bonnie). Cloudflare Worker + D1 + Web Push.",
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "setup:local": "node scripts/setup.mjs --local",
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "links": "node scripts/links.mjs",
+    "keys": "node scripts/keys.mjs",
+    "test": "node test/slots.test.mjs && node test/run.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.164.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

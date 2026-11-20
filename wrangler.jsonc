@@ -1,0 +1,30 @@
+{
+  // Freigang: Cloudflare Worker configuration.
+  // `npm run setup` fills in database_id and VAPID_SUBJECT for you.
+  "name": "freigang",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "freigang",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "TIMEZONE": "Europe/Berlin",
+    "QUIET_START": "0",
+    "QUIET_END": "0",
+    "STALE_HOURS": "5",
+    "VAPID_SUBJECT": "mailto:CHANGE-ME@example.com"
+  },
+  "observability": { "enabled": true }
+}

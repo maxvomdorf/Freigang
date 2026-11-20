@@ -1,0 +1,8 @@
+# Local testing only (npm run setup:local writes the real .dev.vars for you). Never deployed.
+TOKEN_MAXIME=AAAAA-BBBBB-CCCCC-DDDDD
+TOKEN_KATHRIN=EEEEE-FFFFF-GGGGG-HHHHH
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_JWK=
+VAPID_SUBJECT=mailto:test@freigang.test
+# Lets test/run.mjs catch outgoing pushes in a mock push service.
+PUSH_TEST_URL=http://127.0.0.1:9911
