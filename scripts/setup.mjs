@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { generateVapid, generateCode, wrangler, ROOT, readSecrets, writeSecrets, printLinks } from './lib.mjs';
+import { generateVapid, generateCode, wrangler, ROOT, readSecrets, writeSecrets, printLinks, jsonFrom, findDatabase, resolveEmail, applyAndDeploy, askLine } from './lib.mjs';
 
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(`--${n}`);
@@ -21,24 +21,7 @@ if (Number(process.versions.node.split('.')[0]) < 20) die('Node 20 or newer is n
 if (!existsSync(join(ROOT, 'node_modules', 'wrangler')) && !process.env.WRANGLER_BIN) die('Run "npm install" first, then "npm run setup" again.');
 
 async function ask(question) {
-  if (!process.stdin.isTTY) die(`${question} (no terminal to ask in; pass the answer as an option, see README)`);
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const a = (await rl.question(question + ' ')).trim();
-  rl.close();
-  return a;
-}
-
-function patchConfig(re, replacement) {
-  const p = join(ROOT, 'wrangler.jsonc');
-  const t = readFileSync(p, 'utf8');
-  if (!re.test(t)) die(`wrangler.jsonc has changed shape; could not update ${re}. See README for the manual steps.`);
-  writeFileSync(p, t.replace(re, replacement));
-}
-
-function jsonFrom(text) {
-  const a = text.search(/[\[{]/);
-  const b = Math.max(text.lastIndexOf(']'), text.lastIndexOf('}'));
-  return JSON.parse(text.slice(a, b + 1));
+  try { return await askLine(question); } catch (e) { die(e.message); }
 }
 
 // ---------------------------------------------------------------- local mode
@@ -73,15 +56,8 @@ if (!who.ok) {
 try { const w = jsonFrom(who.stdout); say(`  Logged in${w.email ? ' as ' + w.email : ''}.`); } catch { say('  Logged in.'); }
 
 step('2/7', 'Contact address for push messages');
-const cfg = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8');
-const current = /"VAPID_SUBJECT"\s*:\s*"mailto:([^"]*)"/.exec(cfg)?.[1];
-let email = opt('email') || (current && !current.startsWith('CHANGE-ME') ? current : '');
-if (!email) {
-  say('  Apple and Google require a real contact address in push messages (never shown to anyone).');
-  email = await ask('  Your email address:');
-}
-if (!/^[^\s@"\\]+@[^\s@"\\]+\.[^\s@"\\]+$/.test(email)) die('That does not look like an email address.');
-patchConfig(/("VAPID_SUBJECT"\s*:\s*")[^"]*(")/, `$1mailto:${email}$2`);
+let email;
+try { email = await resolveEmail(opt('email')); } catch (e) { die(e.message); }
 say(`  Using ${email}.`);
 
 step('3/7', 'Keys and personal access codes');
@@ -95,34 +71,18 @@ else {
 }
 
 step('4/7', 'Database (Cloudflare D1)');
-const listDbs = () => {
-  const r = wrangler(['d1', 'list', '--json'], { capture: true });
-  if (!r.ok) die(`Could not list databases:\n${r.stderr || r.stdout}`);
-  return jsonFrom(r.stdout);
-};
-let db = listDbs().find((d) => d.name === 'freigang');
+let db;
+try { db = findDatabase('freigang'); } catch (e) { die(e.message); }
 if (db) say('  Database "freigang" already exists, reusing it.');
 else {
   if (!wrangler(['d1', 'create', 'freigang', '--location', 'weur']).ok) die('Creating the database failed.');
-  db = listDbs().find((d) => d.name === 'freigang');
-  if (!db) die('The database was created but could not be found afterwards. Run "npx wrangler d1 list", copy the id into wrangler.jsonc (database_id) and run setup again.');
+  try { db = findDatabase('freigang'); } catch (e) { die(e.message); }
+  if (!db) die('The database was created but could not be found afterwards. Run "npx wrangler d1 list" and try "npm run setup" again.');
 }
-patchConfig(/("database_id"\s*:\s*")[^"]*(")/, `$1${db.uuid}$2`);
-if (!wrangler(['d1', 'migrations', 'apply', 'freigang', '--remote']).ok) die('Applying the database migration failed.');
 
-step('5/7', 'Deploy');
-const outFile = join(mkdtempSync(join(tmpdir(), 'freigang-')), 'wrangler-output.ndjson');
-if (!wrangler(['deploy'], { env: { WRANGLER_OUTPUT_FILE_PATH: outFile } }).ok) {
-  die('Deploy failed. If it mentions a workers.dev subdomain, pick one at https://dash.cloudflare.com (Workers & Pages) and run setup again.');
-}
+step('5/7', 'Database tables and deploy');
 let url = opt('url') || '';
-if (!url && existsSync(outFile)) {
-  for (const line of readFileSync(outFile, 'utf8').split('\n')) {
-    try { const e = JSON.parse(line); if (e.type === 'deploy') url = (e.targets || []).find((t) => /^https:\/\//.test(t)) || url; } catch { /* skip */ }
-  }
-  if (!url) url = /https:\/\/[a-z0-9.-]+\.workers\.dev/i.exec(readFileSync(outFile, 'utf8'))?.[0] || '';
-}
-rmSync(outFile, { force: true });
+try { const u = applyAndDeploy({ databaseId: db.uuid, email }); url = url || u; } catch (e) { die(e.message); }
 if (!url) url = await ask('  Could not read the address. Paste the https://….workers.dev address printed above:');
 url = url.replace(/\/+$/, '');
 if (!/^https:\/\/[^\s/]+$/.test(url)) die(`"${url}" is not a valid address.`);

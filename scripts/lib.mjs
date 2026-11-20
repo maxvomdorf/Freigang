@@ -64,3 +64,83 @@ export function printLinks(s) {
   console.log('\nPersonal links (send each one privately, e.g. by Signal or iMessage):\n');
   for (const l of personalLinks(s)) console.log(`  ${l.label}\n    ${l.link}\n    Code: ${l.code}\n`);
 }
+
+// ---------- deploy (shared by setup.mjs and deploy.mjs) ----------
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { createInterface } from 'node:readline/promises';
+
+export const DEPLOY_CONFIG = 'wrangler.deploy.jsonc';
+export const EMAIL_RE = /^[^\s@"\\]+@[^\s@"\\]+\.[^\s@"\\]+$/;
+
+export function jsonFrom(text) {
+  const a = text.search(/[\[{]/);
+  const b = Math.max(text.lastIndexOf(']'), text.lastIndexOf('}'));
+  return JSON.parse(text.slice(a, b + 1));
+}
+
+export async function askLine(question) {
+  if (!process.stdin.isTTY) throw new Error(`${question} (no terminal to ask in; pass the answer as an option, see README)`);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const a = (await rl.question(question + ' ')).trim();
+  rl.close();
+  return a;
+}
+
+/** Looks up the D1 database by name. Returns {uuid, name} or null. */
+export function findDatabase(name = 'freigang') {
+  const r = wrangler(['d1', 'list', '--json'], { capture: true });
+  if (!r.ok) throw new Error(`Could not list databases:\n${r.stderr || r.stdout}`);
+  return jsonFrom(r.stdout).find((d) => d.name === name) || null;
+}
+
+/**
+ * wrangler.jsonc stays a clean template in git (placeholder database_id and email).
+ * The real values are filled into a generated, git-ignored wrangler.deploy.jsonc right before every deploy,
+ * so pulling an update can never overwrite them and a deploy can never ship the placeholders.
+ */
+export function writeDeployConfig({ databaseId, email }) {
+  const template = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8');
+  const withId = template.replace(/("database_id"\s*:\s*")[^"]*(")/, `$1${databaseId}$2`);
+  const out = withId.replace(/("VAPID_SUBJECT"\s*:\s*")[^"]*(")/, `$1mailto:${email}$2`);
+  if (out === template || !out.includes(databaseId) || !out.includes(`mailto:${email}`)) {
+    throw new Error('wrangler.jsonc has changed shape; could not fill in database_id and VAPID_SUBJECT.');
+  }
+  const p = join(ROOT, DEPLOY_CONFIG);
+  writeFileSync(p, out);
+  return p;
+}
+
+/** The contact address: option, then .secrets.json, then a real address left in wrangler.jsonc, then ask once. */
+export async function resolveEmail(optionValue) {
+  const fromConfig = /"VAPID_SUBJECT"\s*:\s*"mailto:([^"]*)"/.exec(readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8'))?.[1];
+  const secrets = readSecrets();
+  let email = optionValue || secrets?.email || (fromConfig && !fromConfig.startsWith('CHANGE-ME') ? fromConfig : '');
+  if (!email) {
+    console.log('  Apple and Google require a real contact address in push messages (never shown to anyone).');
+    email = await askLine('  Your email address:');
+  }
+  if (!EMAIL_RE.test(email)) throw new Error('That does not look like an email address.');
+  if (secrets && secrets.email !== email) writeSecrets({ ...secrets, email });
+  return email;
+}
+
+/** Applies new database migrations, then deploys. Migrations are additive, so this order is always safe. Returns the deployed URL or ''. */
+export function applyAndDeploy({ databaseId, email }) {
+  writeDeployConfig({ databaseId, email });
+  const migrate = wrangler(['d1', 'migrations', 'apply', 'freigang', '--remote', '-c', DEPLOY_CONFIG]);
+  if (!migrate.ok) throw new Error('Applying the database migrations failed.');
+  const outFile = join(mkdtempSync(join(tmpdir(), 'freigang-')), 'wrangler-output.ndjson');
+  const dep = wrangler(['deploy', '-c', DEPLOY_CONFIG], { env: { WRANGLER_OUTPUT_FILE_PATH: outFile } });
+  if (!dep.ok) { rmSync(outFile, { force: true }); throw new Error('Deploy failed. If it mentions a workers.dev subdomain, pick one at https://dash.cloudflare.com (Workers & Pages) and try again.'); }
+  let url = '';
+  if (existsSync(outFile)) {
+    const text = readFileSync(outFile, 'utf8');
+    for (const line of text.split('\n')) {
+      try { const e = JSON.parse(line); if (e.type === 'deploy') url = (e.targets || []).find((t) => /^https:\/\//.test(t)) || url; } catch { /* skip */ }
+    }
+    if (!url) url = /https:\/\/[a-z0-9.-]+\.workers\.dev/i.exec(text)?.[0] || '';
+  }
+  rmSync(outFile, { force: true });
+  return url.replace(/\/+$/, '');
+}

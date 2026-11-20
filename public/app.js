@@ -1,5 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
+const VERSION = '1.1.0'; // same as src/version.js; a newer server version makes the app reload itself once
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
@@ -104,11 +105,21 @@ function applyState(st) {
   store.set('last', JSON.stringify(st));
 }
 
+// An installed app can keep running old code for days. When the server is newer, reload once (never in a loop, never mid-edit).
+function reloadIfOutdated(serverVersion) {
+  if (!serverVersion || serverVersion === VERSION || S.sheet || S.busy) return;
+  try {
+    if (sessionStorage.getItem('freigang.reloaded') === serverVersion) return;
+    sessionStorage.setItem('freigang.reloaded', serverVersion);
+  } catch { return; }
+  location.reload();
+}
+
 async function refresh() {
   if (!S.code || !S.state) return;
   try {
     const r = await api('GET', '/api/state');
-    if (r.ok) { applyState(r.data); S.online = true; } else S.online = false;
+    if (r.ok) { applyState(r.data); S.online = true; reloadIfOutdated(r.data.version); } else S.online = false;
     if (S.online && S.view === 'plan') await loadPlan();
     if (S.online && S.view === 'log' && me().admin) await loadLog();
   } catch { S.online = false; }
@@ -505,6 +516,7 @@ function sheetHtml() {
     inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${title}</h2><span class="sub">Angemeldet als ${esc(me().name)} · ${CATS[o].name}</span></div>
       ${pushRow}
       ${q.start === q.end ? '' : `<div class="set-row"><div class="tx"><b>Ruhezeit ${q.start}–${q.end} Uhr</b><span>Erinnerungen und Nachfragen pausieren. Meldungen, wenn die andere Katze rausgeht, kommen immer an.</span></div></div>`}
+      <p class="small" style="text-align:center">Freigang Version ${VERSION}</p>
       <button class="btn ghost" data-act="logout" style="${S.confirmLogout ? 'border-color:var(--out);color:var(--out-fg)' : ''}">${S.confirmLogout ? 'Wirklich abmelden? Code wird neu gebraucht' : 'Abmelden'}</button>
       <button class="btn plain" data-act="closeSheet">Schließen</button>`;
   }
