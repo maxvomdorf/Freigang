@@ -39,7 +39,7 @@ npm run deploy           # finds your database, applies new migrations, deploys
 
 Afterwards open **Einstellungen** in the app: it shows the version. Open apps reload themselves once when the server has a newer version, so nobody has to do anything on the phones.
 
-**Going back:** `git checkout v1.1.0` (any tag from `git tag`), then `npm run deploy`. This rolls the code back, not the database; that is why migrations are additive, so older code keeps working with newer tables.
+**Going back:** `git checkout v1.1.0` (any tag from v1.1.0 on, see `git tag`), then `npm run deploy`. This rolls the code back, not the database; that is why migrations are additive, so older code keeps working with newer tables.
 
 **On a new computer:** clone the repo, copy your `.secrets.json` into the folder, `npm install`, `npm run deploy`.
 

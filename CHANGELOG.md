@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.1
+- Changing the note of a cat that is already out no longer weakens the earlier push: it keeps the "beide draußen" warning and the high urgency.
+
 ## 1.2.0
 - Short note on a cat's status: quick chips "In Begleitung" and "Nur kurz draußen", or your own text (up to 40 characters). Set it before the tap, or change it while the cat is announced or out. The neighbour sees it on the card and in the push message; a later change replaces the earlier notification quietly.
 - The note carries over from "In 15 Min" to "Jetzt raus", shows on incidents in the log and has its own CSV column.

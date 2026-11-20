@@ -112,6 +112,9 @@ try {
   ok(r.status === 200 && r.body.state.cats.ilford.override === true && r.body.state.cats.ilford.note === 'In Begleitung', 'forced out is recorded as override and keeps the note');
   await sleep(1000); p = drain();
   ok(p.length === 1 && /beide draußen/.test(p[0].msg.title), 'Kathrin warned: both outside (' + p[0]?.msg?.body + ')');
+  r = await api('maxime', 'PUT', '/api/status/note', { note: 'Nur kurz draußen' });
+  await sleep(1200); p = drain();
+  ok(p.length === 1 && /beide draußen/.test(p[0].msg.title) && /Nur kurz draußen/.test(p[0].msg.body) && p[0].urgency === 'high' && p[0].topic === 'status-ilford', 'a note change keeps the "both outside" warning and its urgency: ' + p[0]?.msg?.title + ' / ' + p[0]?.msg?.body);
   sql('UPDATE events SET ts = ts - 1800000'); // the whole history so far happened 30 min ago
   r = await api('maxime', 'POST', '/api/status', { to: 'in', agoMin: 10 });
   const back = r.body.state.cats.ilford;
@@ -219,7 +222,7 @@ try {
   ok(log.body.kpi.overlapMinutes >= 19 && log.body.kpi.overlapMinutes <= 21, 'overlap lasted about 20 min');
   const inc = log.body.incidents.find((i) => i.override) || {};
   ok(!!inc && inc.second === 'ilford', 'incident marked as override, second cat = Ilford');
-  ok(inc.catNote === 'In Begleitung', 'incident shows the second cat\'s note: ' + inc.catNote);
+  ok(inc.catNote === 'Nur kurz draußen', 'incident shows the second cat\'s current note: ' + inc.catNote);
   ok((await api('maxime', 'PUT', '/api/note', { start: inc.start, note: 'Fauchen am Zaun gehört' })).status === 200, 'note saved');
   ok((await api('maxime', 'GET', '/api/log?days=7')).body.incidents.find((i) => i.start === inc.start).note.startsWith('Fauchen'), 'note appears on the incident');
   const ex = await api('maxime', 'GET', '/api/export?days=30');

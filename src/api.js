@@ -144,11 +144,14 @@ async function noteOnStatus(env, ctx, me, body) {
     `UPDATE events SET note = ?1 WHERE id = (SELECT id FROM events WHERE cat = ?2 ORDER BY id DESC LIMIT 1) AND status IN ('soon', 'out')`,
   ).bind(note || null, cat).run();
   if ((r.meta?.changes ?? 0) === 1 && note && note !== (row.note || '')) {
-    const C = CAT_NAME[cat];
-    ctx.waitUntil(notifyUser(env, userOfCat(other), {
-      title: row.status === 'out' ? `${C} ist draußen` : `${C} will gleich raus`,
-      body: `Neuer Hinweis: „${note}“`, tag: `cat-${cat}`, ts: now, update: true,
-    }, { urgency: 'normal', topic: `status-${cat}` }));
+    // Same tag and topic as the status push, so it replaces it: therefore it must say everything the status push said
+    // ("beide draußen", "bitte vorher reinholen") plus the new note, and be just as urgent.
+    const soonMin = row.soon_until ? Math.max(1, Math.ceil((row.soon_until - now) / MIN)) : 1;
+    const msg = statusMessage({
+      cat, to: row.status, prev: row.prev_status, otherStatus: last[other]?.status ?? 'in', otherSince: last[other]?.ts,
+      ts: row.ts, soonMin, tz: tzOf(env), note,
+    });
+    ctx.waitUntil(notifyUser(env, userOfCat(other), { ...msg, tag: `cat-${cat}`, ts: now, update: true }, { urgency: 'high', topic: `status-${cat}` }));
   }
   return json({ ok: true, state: await buildState(env, me, now) });
 }
