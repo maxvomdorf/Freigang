@@ -7,6 +7,7 @@ import { buildLog, todayStrip } from './stats.js';
 import { lastEvents, eventsSince } from './db.js';
 import { normalize, overlapsWeek } from './slots.js';
 import { VERSION } from './version.js';
+import { NOTE_STATUSES, normalizeNote, noteForNewEvent } from './note.js';
 
 const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -36,8 +37,8 @@ const tzOf = (env) => env.TIMEZONE || 'Europe/Berlin';
 
 function catState(row) {
   return row
-    ? { status: row.status, since: row.ts, soonUntil: row.soon_until, override: !!row.override }
-    : { status: 'in', since: null, soonUntil: null, override: false };
+    ? { status: row.status, since: row.ts, soonUntil: row.soon_until, override: !!row.override, note: NOTE_STATUSES.includes(row.status) ? row.note || '' : '' }
+    : { status: 'in', since: null, soonUntil: null, override: false, note: '' };
 }
 
 async function buildState(env, me, now) {
@@ -64,7 +65,12 @@ async function buildState(env, me, now) {
 
 // ---------- status ----------
 
-function statusMessage({ cat, to, prev, otherStatus, otherSince, ts, soonMin, tz }) {
+function statusMessage({ cat, to, prev, otherStatus, otherSince, ts, soonMin, tz, note }) {
+  const m = baseStatusMessage({ cat, to, prev, otherStatus, otherSince, ts, soonMin, tz });
+  return note ? { ...m, body: `„${note}“ · ${m.body}` } : m;
+}
+
+function baseStatusMessage({ cat, to, prev, otherStatus, otherSince, ts, soonMin, tz }) {
   const C = CAT_NAME[cat], O = CAT_NAME[otherCat(cat)];
   if (to === 'out') {
     if (otherStatus === 'out') {
@@ -101,6 +107,7 @@ async function setStatus(env, ctx, me, body) {
     return json({ error: 'conflict', other: { cat: other, since: last[other].ts } }, 409);
   }
   const override = to === 'out' && oth === 'out' ? 1 : 0;
+  const note = noteForNewEvent(to, cur, last[cat]?.note, body);
 
   let ts = now;
   const ago = clamp(Math.round(numVar(body.agoMin, 0)), 0, 240);
@@ -110,19 +117,39 @@ async function setStatus(env, ctx, me, body) {
 
   const stmts = [
     env.DB.prepare(
-      `INSERT INTO events (cat, status, prev_status, ts, recorded_at, actor, soon_until, override)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(cat, to, cur, ts, now, me.user, soonUntil, override),
+      `INSERT INTO events (cat, status, prev_status, ts, recorded_at, actor, soon_until, override, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(cat, to, cur, ts, now, me.user, soonUntil, override, note),
   ];
   // A decision was made: stop waiting for the other cat. Anyone waiting for *this* cat is notified below, then cleared.
   stmts.push(env.DB.prepare('DELETE FROM watches WHERE user = ? AND cat = ?').bind(me.user, other));
   if (to === 'in') stmts.push(env.DB.prepare('DELETE FROM watches WHERE cat = ?').bind(cat));
   await env.DB.batch(stmts);
 
-  const msg = statusMessage({ cat, to, prev: cur, otherStatus: oth, otherSince: last[other]?.ts, ts, soonMin, tz });
+  const msg = statusMessage({ cat, to, prev: cur, otherStatus: oth, otherSince: last[other]?.ts, ts, soonMin, tz, note });
   ctx.waitUntil(
     notifyUser(env, userOfCat(other), { ...msg, tag: `cat-${cat}`, ts: now }, { urgency: 'high', topic: `status-${cat}` }),
   );
+  return json({ ok: true, state: await buildState(env, me, now) });
+}
+
+/** Change or clear the note of your own cat while it is announced ("soon") or out. Does not create a new event. */
+async function noteOnStatus(env, ctx, me, body) {
+  const cat = me.cat, other = otherCat(cat), now = Date.now();
+  const note = normalizeNote(body.note);
+  const last = await lastEvents(env);
+  const row = last[cat];
+  if (!row || !NOTE_STATUSES.includes(row.status)) return json({ error: 'no_note_now' }, 409);
+  const r = await env.DB.prepare(
+    `UPDATE events SET note = ?1 WHERE id = (SELECT id FROM events WHERE cat = ?2 ORDER BY id DESC LIMIT 1) AND status IN ('soon', 'out')`,
+  ).bind(note || null, cat).run();
+  if ((r.meta?.changes ?? 0) === 1 && note && note !== (row.note || '')) {
+    const C = CAT_NAME[cat];
+    ctx.waitUntil(notifyUser(env, userOfCat(other), {
+      title: row.status === 'out' ? `${C} ist draußen` : `${C} will gleich raus`,
+      body: `Neuer Hinweis: „${note}“`, tag: `cat-${cat}`, ts: now, update: true,
+    }, { urgency: 'normal', topic: `status-${cat}` }));
+  }
   return json({ ok: true, state: await buildState(env, me, now) });
 }
 
@@ -234,6 +261,7 @@ export async function handleApi(request, env, ctx) {
 
     if (path === '/api/state' && m === 'GET') return json(await buildState(env, me, now));
     if (path === '/api/status' && m === 'POST') return setStatus(env, ctx, me, await request.json().catch(() => ({})));
+    if (path === '/api/status/note' && m === 'PUT') return noteOnStatus(env, ctx, me, await request.json().catch(() => ({})));
 
     if (path === '/api/watch') {
       const other = otherCat(me.cat);

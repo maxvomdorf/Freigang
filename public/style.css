@@ -218,3 +218,13 @@ textarea.input { height: 110px; padding: 12px 16px; resize: none; line-height: 1
 @keyframes fade { from { opacity: 0; } }
 @keyframes rise { from { transform: translateY(24px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* quick note on a cat's status */
+.notebox { display: flex; flex-direction: column; gap: 8px; }
+.notes { display: flex; flex-wrap: wrap; gap: 8px; }
+.notes button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; padding: 0 14px; border-radius: 22px; border: 1.5px solid var(--ctl-line); background: var(--card); font-weight: 600; font-size: 14px; color: var(--ink); }
+.notes button span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes button[aria-pressed=true] { background: var(--ink); color: var(--card); border-color: var(--ink); }
+.notes button:disabled { opacity: .55; }
+.notepill { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; max-width: 100%; padding: 4px 10px; border-radius: 12px; background: var(--tile); font-size: 13px; font-weight: 600; color: var(--ink); }
+.notepill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
