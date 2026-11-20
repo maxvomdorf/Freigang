@@ -68,7 +68,7 @@ export function buildLog({ events, notes, now, days, tz }) {
       const trigger = events.find((x) => x.cat === second && x.status === 'out' && x.ts === secondStart);
       return {
         start: s, end: e, ongoing: e >= now - MIN, minutes: Math.max(1, Math.round((e - s) / MIN)),
-        second, override: !!(trigger && trigger.override), note: noteMap.get(s) ?? '',
+        second, override: !!(trigger && trigger.override), note: noteMap.get(s) ?? '', catNote: trigger?.note || '',
       };
     })
     .reverse();

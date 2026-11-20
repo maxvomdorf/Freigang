@@ -1,6 +1,7 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.1.0'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.2.0'; // same as src/version.js; a newer server version makes the app reload itself once
+const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
@@ -43,7 +44,7 @@ const store = {
 const S = {
   code: '', state: null, skew: 0, tz: 'Europe/Berlin', online: true, view: 'loading',
   plan: null, planDay: 0, log: null, logDays: 7,
-  sheet: null, toast: '', busy: false, loginError: '', loginBusy: false,
+  noteDraft: '', sheet: null, toast: '', busy: false, loginError: '', loginBusy: false,
   push: { supported: false, perm: 'default', subscribed: false }, installEvent: null, confirmLogout: false,
 };
 const now = () => Date.now() + S.skew;
@@ -102,6 +103,7 @@ function applyState(st) {
   S.state = st;
   S.skew = st.now - Date.now();
   if (st.tz !== S.tz || !dtf) { S.tz = st.tz; makeFmt(); }
+  if (st.cats?.[st.me.cat]?.status !== 'in') S.noteDraft = '';
   store.set('last', JSON.stringify(st));
 }
 
@@ -231,7 +233,7 @@ function banner() {
     tone = 'warn'; title = soonLeft(tc) ? `${tn} geht in ${soonLeft(tc)} Min raus` : `${tn} will jetzt raus`;
     sub = oc.status === 'out' ? `${on} ist noch draußen – bitte vorher reinholen.` : `${on} bleibt besser noch drin.`;
   } else if (tc.status === 'out') {
-    tone = 'note'; title = `${tn} ist draußen`; sub = S.state.waiting ? 'Du wirst benachrichtigt, sobald sie drin ist' : `${on} bleibt drin`;
+    tone = 'note'; title = `${tn} ist draußen`; sub = (tc.note ? `„${tc.note}“ · ` : '') + (S.state.waiting ? 'Du wirst benachrichtigt, sobald sie drin ist' : `${on} bleibt drin`);
   } else if (oc.status === 'out') {
     tone = 'note'; title = `${on} ist draußen`; sub = `${tn} bleibt drin`;
   }
@@ -271,7 +273,15 @@ function ownCard() {
         ${statusChip(c.status)}
         <span class="meta">${esc(meta)}</span>
       </div>
-    </div>${bar}<div class="actions">${actions}</div></section>`;
+    </div>${bar}${noteChips(c)}<div class="actions">${actions}</div></section>`;
+}
+
+// Quick note on your own cat. While it is inside the choice is a draft that rides along with the next tap; once it is announced or out the chips edit the live note.
+function noteChips(c) {
+  const live = c.status !== 'in', cur = live ? c.note : S.noteDraft, custom = cur && !NOTES.includes(cur);
+  const chips = NOTES.map((n, i) => `<button type="button" data-act="notePick" data-n="${i}" aria-pressed="${cur === n}" ${S.busy ? 'disabled' : ''}>${esc(n)}</button>`).join('');
+  const own = `<button type="button" data-act="noteCustom" aria-pressed="${!!custom}" aria-label="${custom ? 'Eigenen Hinweis ändern' : 'Eigenen Hinweis schreiben'}" ${S.busy ? 'disabled' : ''}>${ic('pencil', 14)}<span>${custom ? esc(cur) : 'Eigener Text'}</span></button>`;
+  return `<div class="notebox"><span class="eyebrow">${live ? 'Hinweis' : `Hinweis für ${esc(me().otherName)} (optional)`}</span><div class="notes" role="group" aria-label="Hinweis">${chips}${own}</div></div>`;
 }
 
 function otherCard() {
@@ -282,6 +292,7 @@ function otherCard() {
     <div class="stack" style="flex:1">
       <div class="row" style="gap:10px;flex-wrap:wrap"><h2 class="name-m">${CATS[t].name}</h2>${statusChip(c.status, 'sm')}</div>
       <span class="meta">${esc(meta)}</span>
+      ${c.note ? `<span class="notepill">${ic('info', 14)}<span>${esc(c.note)}</span></span>` : ''}
       <span class="lock">${ic('lock', 14)} Status setzt ${esc(me().otherName)}</span>
     </div></section>`;
 }
@@ -388,7 +399,7 @@ function logView() {
         <div class="track" style="top:2px;height:12px;border-radius:6px"></div><div class="track" style="top:20px;height:12px;border-radius:6px"></div>${il('ilford', r, 2)}${il('bonnie', r, 20)}</div></div>`).join('');
     const heat = (label, cells, bg) => `<div class="heatrow"><span>${label}</span><div>${cells.map((c) => `<i style="background:${bg};opacity:${c.o}"></i>`).join('')}</div></div>`;
     const inc = L.incidents.map((i) => `<button class="inc" data-act="note" data-start="${i.start}"><div class="dot">${ic('alert', 18)}</div>
-      <div class="txt"><b>${esc(incidentWhen(i))}</b><span class="meta">${durShort(i.minutes)} · zweite Katze: ${CATS[i.second].name}</span>
+      <div class="txt"><b>${esc(incidentWhen(i))}</b><span class="meta">${durShort(i.minutes)} · zweite Katze: ${CATS[i.second].name}${i.catNote ? ` („${esc(i.catNote)}“)` : ''}</span>
       ${i.note ? `<em>Notiz: ${esc(i.note)}</em>` : ''}</div>${i.override ? '<span class="tag">Override</span>' : ''}</button>`).join('');
     const ranges = [7, 30].map((d) => `<button data-act="logDays" data-d="${d}" aria-pressed="${S.logDays === d}">${d} Tage</button>`).join('');
     body = `<div class="seg-ctl" role="group" aria-label="Zeitraum">${ranges}</div><div class="kpis">
@@ -497,6 +508,15 @@ function sheetHtml() {
       <button class="btn in sm" data-act="saveSlot" ${sh.busy ? 'disabled' : ''}>Speichern</button>
       ${sh.id ? '<button class="btn plain" data-act="deleteSlot" style="color:var(--out-fg)">Zeitfenster löschen</button>' : ''}
       <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
+  } else if (sh.type === 'catnote') {
+    title = 'Eigener Hinweis';
+    const has = !!String(sh.text || '').trim();
+    inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${esc(title)}</h2><span class="sub">${esc(me().otherName)} sieht ihn bei ${CATS[ownCat()].name}.</span></div>
+      <div class="field"><label for="cat-note-text">Kurzer Hinweis</label><input class="input text" id="cat-note-text" type="text" maxlength="${NOTE_MAX}" autocomplete="off" enterkeyhint="done" placeholder="z. B. Mit Leine im Garten" value="${esc(sh.text)}"></div>
+      <span class="small" id="cat-note-count">${Array.from(sh.text || '').length} / ${NOTE_MAX}</span>
+      <button class="btn in sm" data-act="saveCatNote" ${S.busy ? 'disabled' : ''}>${sh.live ? 'Speichern' : 'Übernehmen'}</button>
+      ${has || sh.live ? `<button class="btn ghost" data-act="clearCatNote">Hinweis entfernen</button>` : ''}
+      <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
   } else if (sh.type === 'note') {
     title = 'Notiz zur Überschneidung';
     inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${esc(title)}</h2><span class="sub">${esc(sh.when)}</span></div>
@@ -571,7 +591,7 @@ async function setStatus(to, extra = {}, okMsg = '') {
     const r = await api('POST', '/api/status', { to, ...extra });
     if (r.status === 409 && r.data?.error === 'conflict') { S.busy = false; openSheet({ type: 'conflict', since: r.data.other.since }); await refresh(); return; }
     if (r.ok) {
-      applyState(r.data.state); S.online = true; S.sheet = null;
+      S.noteDraft = ''; applyState(r.data.state); S.online = true; S.sheet = null;
       const nobody = me().partnerDevices === 0 && okMsg;
       if (nobody && !S.warnedNoDevices) { S.warnedNoDevices = true; toast(`Gespeichert. ${me().otherName} hat Benachrichtigungen noch nicht aktiviert.`); }
       else toast(nobody ? 'Gespeichert.' : okMsg);
@@ -580,14 +600,44 @@ async function setStatus(to, extra = {}, okMsg = '') {
   S.busy = false; render();
 }
 
+// The note only travels with a tap from "inside". From "announced" to "out" the server carries the existing note over.
+const noteExtra = () => (S.state.cats[ownCat()].status === 'in' && S.noteDraft ? { note: S.noteDraft } : {});
+
+async function putNote(note) {
+  if (S.busy) return;
+  S.busy = true; render();
+  try {
+    const r = await api('PUT', '/api/status/note', { note });
+    if (r.ok) { applyState(r.data.state); S.online = true; S.sheet = null; toast(note ? 'Hinweis gespeichert.' : 'Hinweis entfernt.'); }
+    else if (r.status === 409) { S.sheet = null; toast('Der Status hat sich inzwischen geändert.'); await refresh(); }
+    else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+  } catch { S.online = false; toast('Keine Verbindung – es wurde nichts geändert.'); }
+  S.busy = false; render();
+}
+
 const A = {
+  notePick(d) {
+    const text = NOTES[+d.n], c = S.state.cats[ownCat()];
+    if (c.status === 'in') { S.noteDraft = S.noteDraft === text ? '' : text; render(); }
+    else putNote(c.note === text ? '' : text);
+  },
+  noteCustom() {
+    const c = S.state.cats[ownCat()], cur = c.status === 'in' ? S.noteDraft : c.note;
+    openSheet({ type: 'catnote', text: cur && !NOTES.includes(cur) ? cur : '', live: c.status !== 'in' });
+  },
+  saveCatNote() {
+    const sh = S.sheet, text = Array.from(String(sh.text || '').replace(/\s+/g, ' ').trim()).slice(0, NOTE_MAX).join('').trim();
+    if (sh.live) { putNote(text); return; }
+    S.noteDraft = text; S.sheet = null; render();
+  },
+  clearCatNote() { if (S.sheet?.live) putNote(''); else { S.noteDraft = ''; S.sheet = null; render(); } },
   tab(d) { S.view = d.v; S.sheet = null; render(); if (d.v === 'plan' && !S.plan) loadPlan().then(render); refresh(); },
   raus() {
     const t = otherCat();
     if (S.state.cats[t].status === 'out') openSheet({ type: 'conflict', since: S.state.cats[t].since });
-    else setStatus('out', {}, `${me().otherName} wurde benachrichtigt.`);
+    else setStatus('out', noteExtra(), `${me().otherName} wurde benachrichtigt.`);
   },
-  soon() { setStatus('soon', { soonMin: SOON_MIN }, `${me().otherName} ist vorgewarnt.`); },
+  soon() { setStatus('soon', { soonMin: SOON_MIN, ...noteExtra() }, `${me().otherName} ist vorgewarnt.`); },
   cancelSoon() { setStatus('in', {}, `${me().otherName} weiß Bescheid.`); },
   back() { setStatus('in', {}, `${me().otherName} wurde benachrichtigt.`); },
   adjust() { openSheet({ type: 'adjust' }); },
@@ -600,7 +650,7 @@ const A = {
     await refresh();
   },
   async unwait() { try { await api('DELETE', '/api/watch'); } catch { /* ignore */ } await refresh(); },
-  force() { setStatus('out', { force: true }, `Override im Protokoll vermerkt. ${me().otherName} wurde benachrichtigt.`); },
+  force() { setStatus('out', { force: true, ...noteExtra() }, `Override im Protokoll vermerkt. ${me().otherName} wurde benachrichtigt.`); },
   closeSheet() { closeSheet(); },
   closeToast() { S.toast = ''; renderOverlay(); },
   settings() { S.confirmLogout = false; openSheet({ type: 'settings' }); },
@@ -669,8 +719,9 @@ async function exportCsv() {
     if (!r.ok) throw new Error('export');
     const st = { in: 'drinnen', soon: 'gleich draußen', out: 'draußen' };
     const f = (ts) => { const p = tp(ts); return `${p.y}-${p.mo}-${p.d} ${p.h}:${p.mi}:${p.s}`; };
-    const lines = ['Zeit;Katze;Status;Vorher;Erfasst von;Eingetragen um;Override'];
-    for (const e of r.data.events) lines.push([f(e.ts), CATS[e.cat].name, st[e.status], st[e.prev_status] || '', e.actor, f(e.recorded_at), e.override ? 'ja' : ''].join(';'));
+    const q = (v) => { const s = String(v ?? ''); return /[;"\r\n]/.test(s) || /^[=+\-@\t]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const lines = ['Zeit;Katze;Status;Vorher;Erfasst von;Eingetragen um;Override;Hinweis'];
+    for (const e of r.data.events) lines.push([f(e.ts), CATS[e.cat].name, st[e.status], st[e.prev_status] || '', e.actor, f(e.recorded_at), e.override ? 'ja' : '', e.note || ''].map(q).join(';'));
     const csv = '﻿' + lines.join('\r\n') + '\r\n';
     const name = `freigang-protokoll-${dayKey(now())}.csv`;
     const file = new File([csv], name, { type: 'text/csv' });
@@ -715,6 +766,7 @@ document.addEventListener('input', (ev) => {
     const h = document.getElementById('slot-hint'); if (h) h.textContent = slotHint(S.sheet);
   }
   else if (t.id === 'note-text' && S.sheet) S.sheet.note = t.value;
+  else if (t.id === 'cat-note-text' && S.sheet) { S.sheet.text = t.value; const c = document.getElementById('cat-note-count'); if (c) c.textContent = `${Array.from(t.value).length} / ${NOTE_MAX}`; }
 });
 
 document.addEventListener('submit', async (ev) => {

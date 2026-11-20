@@ -1,5 +1,5 @@
 // Freigang service worker: offline shell + Web Push. Never touches /api.
-const VERSION = '1.1.0'; // same as src/version.js; a new version means a fresh cache
+const VERSION = '1.2.0'; // same as src/version.js; a new version means a fresh cache
 const CACHE = 'freigang-' + VERSION;
 const SHELL = ['/', '/app.js', '/style.css', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/apple-touch-icon.png', '/icons/icon.svg', '/icons/favicon-32.png',
   '/img/ilford-head.svg', '/img/bonnie-head.svg', '/img/ilford-curled.svg', '/img/bonnie-curled.svg', '/img/ilford-sitting.svg', '/img/bonnie-sitting.svg',
@@ -47,7 +47,7 @@ self.addEventListener('push', (e) => {
       await self.registration.showNotification(title, {
         body: d.body || '',
         tag: d.tag || 'freigang',
-        renotify: true,
+        renotify: !d.update,
         icon: '/icons/icon-192.png',
         badge: '/icons/favicon-32.png',
         data: { url: d.url || '/' },

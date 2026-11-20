@@ -108,8 +108,8 @@ try {
   ok(p.length === 1 && p[0].user === 'maxime' && /Bonnie ist wieder drin/.test(p[0].msg.title) && /Ilford kann raus/.test(p[0].msg.body), 'waiting Maxime told Ilford can go out');
   ok((await api('maxime', 'GET', '/api/state')).body.waiting === false, 'watch cleared once she is in');
   await api('kathrin', 'POST', '/api/status', { to: 'out' }); await sleep(800); drain();
-  r = await api('maxime', 'POST', '/api/status', { to: 'out', force: true });
-  ok(r.status === 200 && r.body.state.cats.ilford.override === true, 'forced out is recorded as override');
+  r = await api('maxime', 'POST', '/api/status', { to: 'out', force: true, note: 'In Begleitung' });
+  ok(r.status === 200 && r.body.state.cats.ilford.override === true && r.body.state.cats.ilford.note === 'In Begleitung', 'forced out is recorded as override and keeps the note');
   await sleep(1000); p = drain();
   ok(p.length === 1 && /beide draußen/.test(p[0].msg.title), 'Kathrin warned: both outside (' + p[0]?.msg?.body + ')');
   sql('UPDATE events SET ts = ts - 1800000'); // the whole history so far happened 30 min ago
@@ -120,6 +120,45 @@ try {
   r = await api('maxime', 'POST', '/api/status', { to: 'in', agoMin: 500 });
   ok(r.status === 200 && r.body.noop === true, 'already inside: no new event');
   await api('kathrin', 'POST', '/api/status', { to: 'in' }); await sleep(800); drain();
+
+  console.log('status note');
+  r = await api('maxime', 'POST', '/api/status', { to: 'soon', soonMin: 15, note: '  Mit   Leine\nim Garten ' });
+  ok(r.body.state.cats.ilford.note === 'Mit Leine im Garten', 'note is normalised and stored: ' + r.body.state.cats.ilford.note);
+  await sleep(1200); p = drain();
+  ok(p.length === 1 && /„Mit Leine im Garten“/.test(p[0].msg.body), 'early-warning push carries the note: ' + p[0]?.msg?.body);
+  r = await api('maxime', 'POST', '/api/status', { to: 'out' });
+  ok(r.body.state.cats.ilford.status === 'out' && r.body.state.cats.ilford.note === 'Mit Leine im Garten', 'soon -> out keeps the note');
+  await sleep(1200); p = drain();
+  ok(p.length === 1 && /„Mit Leine im Garten“/.test(p[0].msg.body), 'out push carries the carried-over note');
+  ok((await api('kathrin', 'GET', '/api/state')).body.cats.ilford.note === 'Mit Leine im Garten', 'Kathrin sees the note');
+  r = await api('maxime', 'PUT', '/api/status/note', { note: 'Nur kurz draußen' });
+  ok(r.status === 200 && r.body.state.cats.ilford.note === 'Nur kurz draußen', 'note can be changed while out');
+  await sleep(1200); p = drain();
+  ok(p.length === 1 && p[0].user === 'kathrin' && p[0].msg.update === true && p[0].msg.tag === 'cat-ilford' && /Nur kurz draußen/.test(p[0].msg.body), 'change replaces the earlier notification quietly: ' + JSON.stringify(p[0]?.msg));
+  r = await api('maxime', 'PUT', '/api/status/note', { note: 'Nur kurz draußen' });
+  await sleep(800); ok(drain().length === 0, 'same note again sends no push');
+  r = await api('kathrin', 'PUT', '/api/status/note', { note: 'Fremd' });
+  ok(r.status === 409, 'Kathrin cannot set a note while Bonnie is inside');
+  ok((await api('maxime', 'GET', '/api/state')).body.cats.ilford.note === 'Nur kurz draußen', "Kathrin's attempt left Ilford's note alone");
+  r = await api('maxime', 'PUT', '/api/status/note', { note: '' });
+  ok(r.body.state.cats.ilford.note === '', 'empty note clears it');
+  await sleep(800); ok(drain().length === 0, 'clearing sends no push');
+  r = await api('maxime', 'PUT', '/api/status/note', { note: 'Wieder da' });
+  r = await api('maxime', 'POST', '/api/status', { to: 'in', note: 'ignored' });
+  ok(r.body.state.cats.ilford.note === '', 'coming inside drops the note, even if one is sent');
+  await sleep(800); drain();
+  r = await api('maxime', 'PUT', '/api/status/note', { note: 'Zu spät' });
+  ok(r.status === 409, 'no note change while inside');
+  r = await api('maxime', 'POST', '/api/status', { to: 'soon', note: 'A' });
+  r = await api('maxime', 'POST', '/api/status', { to: 'out', note: '' });
+  ok(r.body.state.cats.ilford.note === '', 'explicit empty note on "out" clears the carried one');
+  await api('maxime', 'POST', '/api/status', { to: 'in' });
+  r = await api('maxime', 'POST', '/api/status', { to: 'out', note: 'x'.repeat(90) });
+  ok(r.body.state.cats.ilford.note.length === 40, 'long note is capped at 40');
+  r = await api('maxime', 'POST', '/api/status', { to: 'in' });
+  const exp = (await api('maxime', 'GET', '/api/export?days=1')).body.events;
+  ok(exp.some((e) => e.note === 'Mit Leine im Garten'), 'export carries the note column');
+  await sleep(1000); drain();
 
   console.log('plan');
   const z = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short' }).formatToParts(new Date());
@@ -180,6 +219,7 @@ try {
   ok(log.body.kpi.overlapMinutes >= 19 && log.body.kpi.overlapMinutes <= 21, 'overlap lasted about 20 min');
   const inc = log.body.incidents.find((i) => i.override) || {};
   ok(!!inc && inc.second === 'ilford', 'incident marked as override, second cat = Ilford');
+  ok(inc.catNote === 'In Begleitung', 'incident shows the second cat\'s note: ' + inc.catNote);
   ok((await api('maxime', 'PUT', '/api/note', { start: inc.start, note: 'Fauchen am Zaun gehört' })).status === 200, 'note saved');
   ok((await api('maxime', 'GET', '/api/log?days=7')).body.incidents.find((i) => i.start === inc.start).note.startsWith('Fauchen'), 'note appears on the incident');
   const ex = await api('maxime', 'GET', '/api/export?days=30');

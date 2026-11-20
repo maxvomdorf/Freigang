@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+- Short note on a cat's status: quick chips "In Begleitung" and "Nur kurz draußen", or your own text (up to 40 characters). Set it before the tap, or change it while the cat is announced or out. The neighbour sees it on the card and in the push message; a later change replaces the earlier notification quietly.
+- The note carries over from "In 15 Min" to "Jetzt raus", shows on incidents in the log and has its own CSV column.
+- No database migration needed (uses the existing `events.note` column). Older phones keep working and simply do not show the note.
+
 ## 1.1.0
 - `npm run deploy` is now safe for updates: it finds your database, fills in your email, applies new database migrations and deploys. `wrangler.jsonc` stays a clean template.
 - The app shows its version in Einstellungen and reloads itself once when the server has a newer version.

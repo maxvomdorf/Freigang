@@ -25,6 +25,24 @@ Your codes and keys are saved in `.secrets.json` (never commit or share it). `np
 
 If you have no workers.dev address yet, Cloudflare asks you to pick a subdomain during the first deploy. Follow the prompt.
 
+## Updating (every later change)
+
+Updates are small and never touch your data: new database columns are only ever added, never renamed or removed.
+
+```sh
+git pull                 # or unzip the new version over this folder; .secrets.json stays
+npm install              # only needed when package.json changed
+npm run deploy           # finds your database, applies new migrations, deploys
+```
+
+`npm run deploy` fills in your own database id and email (from `.secrets.json`) while deploying. `wrangler.jsonc` stays a clean template, so an update can never overwrite your values or ship the placeholders. If it cannot find your email it asks once and remembers it.
+
+Afterwards open **Einstellungen** in the app: it shows the version. Open apps reload themselves once when the server has a newer version, so nobody has to do anything on the phones.
+
+**Going back:** `git checkout v1.1.0` (any tag from `git tag`), then `npm run deploy`. This rolls the code back, not the database; that is why migrations are additive, so older code keeps working with newer tables.
+
+**On a new computer:** clone the repo, copy your `.secrets.json` into the folder, `npm install`, `npm run deploy`.
+
 ## Install on the phones
 
 **iPhone** (needs iOS 16.4 or newer; push only works for the installed app)
@@ -42,7 +60,7 @@ Tip: send each link in a private message. Anyone with the link can switch that p
 
 | Screen | What it does |
 | --- | --- |
-| Jetzt | Status banner, your cat with the big button, the other cat read-only, today's timeline |
+| Jetzt | Status banner, your cat with the big button and an optional note ("In Begleitung", "Nur kurz draußen" or your own text, up to 40 characters), the other cat read-only with its note, today's timeline |
 | Plan | Weekly slots per cat (any time of day, may run past midnight), reminder 15 min before, overlap warning |
 | Protokoll | Admin only: KPIs, day bands, heatmap, incidents with notes, CSV export, 7 or 30 days |
 | Settings (top right) | Notifications on/off, test message, sign out |
@@ -51,7 +69,7 @@ Messages are sent when the other cat goes out or comes in, when someone announce
 
 ## Settings you may want to change
 
-In `wrangler.jsonc` under `vars`, then `npm run deploy`:
+In `wrangler.jsonc` under `vars` (this is the one place where your own edits belong; commit them), then `npm run deploy`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -80,7 +98,7 @@ npx wrangler secret put TOKEN_MAXIME     # paste the value, repeat for the other
                                          # TOKEN_KATHRIN, VAPID_PUBLIC_KEY, VAPID_PRIVATE_JWK
 ```
 
-Put your real email into `VAPID_SUBJECT` in `wrangler.jsonc` (`mailto:you@example.com`), run `npm run deploy`, and open `https://freigang.<your-subdomain>.workers.dev/#k=<TOKEN_MAXIME>`.
+Put your real email into `VAPID_SUBJECT` in `wrangler.jsonc` (`mailto:you@example.com`), run `npx wrangler deploy` (not `npm run deploy`, which uses its own generated config), and open `https://freigang.<your-subdomain>.workers.dev/#k=<TOKEN_MAXIME>`.
 
 ## Develop and test locally
 
