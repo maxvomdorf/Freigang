@@ -115,7 +115,7 @@ export function writeDeployConfig({ databaseId, email }) {
 export async function resolveEmail(optionValue) {
   const fromConfig = /"VAPID_SUBJECT"\s*:\s*"mailto:([^"]*)"/.exec(readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8'))?.[1];
   const secrets = readSecrets();
-  let email = optionValue || secrets?.email || (fromConfig && !fromConfig.startsWith('CHANGE-ME') ? fromConfig : '');
+  let email = optionValue || process.env.FREIGANG_EMAIL || secrets?.email || (fromConfig && !fromConfig.startsWith('CHANGE-ME') ? fromConfig : '');
   if (!email) {
     console.log('  Apple and Google require a real contact address in push messages (never shown to anyone).');
     email = await askLine('  Your email address:');

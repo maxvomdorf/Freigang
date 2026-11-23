@@ -43,6 +43,17 @@ Afterwards open **Einstellungen** in the app: it shows the version. Open apps re
 
 **On a new computer:** clone the repo, copy your `.secrets.json` into the folder, `npm install`, `npm run deploy`.
 
+## Automatic deploy (GitHub)
+
+With this, every push to `main` goes live by itself: GitHub runs the tests, then deploys to Cloudflare, and the phones reload. You do nothing per update. One-time setup:
+
+1. **Cloudflare API token:** dash.cloudflare.com → My Profile → API Tokens → Create Token → Create Custom Token. Permissions: *Account · Workers Scripts · Edit*, *Account · D1 · Edit*, *Account · Account Settings · Read*. Account Resources: your account. Copy the token once.
+2. **Account id:** dash.cloudflare.com → Workers & Pages → the "Account ID" in the right-hand column.
+3. **GitHub secrets:** in the repo → Settings → Secrets and variables → Actions → New repository secret. Create three: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `FREIGANG_EMAIL` (your real email, used as push contact).
+4. Push to `main`, or run the workflow by hand under the repo's Actions tab. The first deploy after the one-time `npm run setup` needs nothing else.
+
+If the workflow fails, the Actions tab shows the step and the message. A failing test stops the deploy, so the phones keep the last working version.
+
 ## Install on the phones
 
 **iPhone** (needs iOS 16.4 or newer; push only works for the installed app)
