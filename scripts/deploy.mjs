@@ -13,8 +13,11 @@ const die = (m) => { console.error(`\nStopped: ${m}`); process.exit(1); };
 try {
   const version = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')).version;
   console.log(`Freigang ${version}: deploying to your Cloudflare account`);
-  const who = wrangler(['whoami', '--json'], { capture: true });
-  if (!who.ok) die('Not logged in to Cloudflare. Run "npx wrangler login" first.');
+  // In automatic deploys (GitHub Actions) login is the CLOUDFLARE_API_TOKEN; a failure then shows up at the first real call.
+  if (!process.env.CLOUDFLARE_API_TOKEN) {
+    const who = wrangler(['whoami', '--json'], { capture: true });
+    if (!who.ok) die('Not logged in to Cloudflare. Run "npx wrangler login" first.');
+  }
   const db = findDatabase('freigang');
   if (!db) die('No database called "freigang" found. This looks like a first install: run "npm run setup" instead.');
   const email = await resolveEmail(opt('email'));

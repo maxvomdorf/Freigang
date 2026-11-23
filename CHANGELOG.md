@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.3.0
+- Automatic deploy: every push to `main` runs the tests on GitHub and then deploys to Cloudflare (`.github/workflows/deploy.yml`). `npm run deploy` still works by hand.
+
 ## 1.2.1
 - Changing the note of a cat that is already out no longer weakens the earlier push: it keeps the "beide draußen" warning and the high urgency.
 
