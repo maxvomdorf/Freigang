@@ -1,6 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.3.0'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.3.1'; // same as src/version.js; a newer server version makes the app reload itself once
 const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -456,7 +456,7 @@ function onboardingView() {
       ${S.installEvent ? '<button class="btn ghost sm" data-act="install">App installieren</button>' : ''}
       ${isIOS() ? `<p>Beim ersten Öffnen vom Home-Bildschirm fragt die App noch einmal nach deinem Zugangscode.</p><button class="btn ghost sm" data-act="copyCode">Code kopieren</button>` : ''}`}
     </div></li>`;
-  const step2 = `<li class="step ${!pushOn && !iosNeedsInstall ? 'now' : ''}"><span class="n ${pushOn ? 'done' : ''}">${pushOn ? ic('check', 18) : '2'}</span><div class="body">
+  const step2 = `<li class="step ${!pushOn && !iosNeedsInstall ? 'cur' : ''}"><span class="n ${pushOn ? 'done' : ''}">${pushOn ? ic('check', 18) : '2'}</span><div class="body">
       <b>Benachrichtigungen erlauben</b>
       <p>Damit du sofort erfährst, wenn ${CATS[otherCat()].name} rausgeht – und ${esc(me().otherName)}, wenn ${CATS[ownCat()].name} geht.</p>
       ${pushOn ? '<p style="color:var(--in-fg);font-weight:600">Aktiv auf diesem Gerät.</p>'

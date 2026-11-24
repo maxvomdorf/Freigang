@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.3.1
+- Fix: the first-run screen showed the "notifications" step as a thin vertical bar (its CSS class clashed with the timeline marker).
+
 ## 1.3.0
 - Automatic deploy: every push to `main` runs the tests on GitHub and then deploys to Cloudflare (`.github/workflows/deploy.yml`). `npm run deploy` still works by hand.
 
