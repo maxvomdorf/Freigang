@@ -1,142 +1,158 @@
 # Freigang
 
-A small installable web app for two neighbours who share one problem: Ilford and Bonnie must not be outside at the same time.
+Eine kleine installierbare Web-App für zwei Nachbarn mit demselben Problem: Ilford und Bonnie dürfen nicht gleichzeitig draußen sein.
 
-- Everyone sees the status of **both** cats (inside / leaving soon / outside).
-- Everyone switches **only their own** cat, with one tap. The other person gets a push message every time.
-- "Leaving in 15 min" warns the neighbour before the door opens. If the other cat is already out, the app asks first: wait for a message, or go anyway (recorded as an override).
-- A weekly plan with reminders shows overlaps before they happen.
-- The admin (Maxime) gets a log: overlaps, daily bands, a time-of-day heatmap, notes per incident, CSV export.
+- Beide sehen den Status **beider** Katzen (drinnen / geht gleich raus / draußen).
+- Jeder schaltet **nur die eigene** Katze, mit einem Tipp. Die andere Person bekommt jedes Mal eine Push-Nachricht.
+- „In 15 Min“ warnt den Nachbarn, bevor die Tür aufgeht. Ist die andere Katze schon draußen, fragt die App vorher nach: warten und benachrichtigt werden, oder trotzdem raus (wird als Override festgehalten).
+- Ein Wochenplan mit Erinnerungen zeigt Überschneidungen, bevor sie passieren.
+- Der Admin (Maxime) bekommt ein Protokoll: Überschneidungen, Tagesbänder über 24 Stunden, eine Uhrzeiten-Heatmap, Notizen zu jedem Vorfall und CSV-Export.
 
-The UI is German. Runs on Cloudflare (Worker + D1 database + a cron trigger), free plan is enough. No tracking, no third-party requests, fonts are self-hosted.
+Die Oberfläche ist deutsch. Die App läuft auf Cloudflare (Worker, D1-Datenbank und ein Cron-Trigger), der kostenlose Tarif reicht. Kein Tracking, keine Anfragen an Dritte, die Schriften liegen selbst gehostet bei.
 
-## Deploy (once, about 5 minutes, needs a computer)
+## Einrichten (einmalig, etwa 5 Minuten, am Computer)
 
-You need a free [Cloudflare account](https://dash.cloudflare.com/sign-up) and [Node.js](https://nodejs.org) 20 or newer.
+Du brauchst ein kostenloses [Cloudflare-Konto](https://dash.cloudflare.com/sign-up) und [Node.js](https://nodejs.org) ab Version 20.
 
 ```sh
 npm install
 npm run setup
 ```
 
-`npm run setup` logs you in, asks for your email address (Apple and Google insist on a real contact address in push messages; nobody else sees it), creates the database, deploys, uploads the secrets, checks that the app is online and prints **two personal links**, one for Maxime and one for Kathrin. It is safe to run again: it reuses the database and the codes.
+`npm run setup` meldet dich bei Cloudflare an, fragt nach deiner Mailadresse (Apple und Google verlangen in Push-Nachrichten eine echte Kontaktadresse, sonst sieht sie niemand), legt die Datenbank an, deployt, lädt die Geheimnisse hoch, prüft, ob die App erreichbar ist, und druckt **zwei persönliche Links**: einen für Maxime, einen für Kathrin. Du kannst es gefahrlos erneut ausführen: Datenbank und Codes werden wiederverwendet.
 
-Your codes and keys are saved in `.secrets.json` (never commit or share it). `npm run links` prints the links again.
+Deine Codes und Schlüssel liegen in `.secrets.json` (niemals committen oder weitergeben). `npm run links` druckt die Links noch einmal.
 
-If you have no workers.dev address yet, Cloudflare asks you to pick a subdomain during the first deploy. Follow the prompt.
+Gibt es noch keine workers.dev-Adresse, fragt Cloudflare beim ersten Deploy nach einem Subdomain-Namen. Folge einfach der Abfrage.
 
-## Updating (every later change)
+**Wenn etwas hakt (Windows):**
 
-Updates are small and never touch your data: new database columns are only ever added, never renamed or removed.
+- *„Die Ausführung von Skripts ist deaktiviert“* beim Aufruf von `npm`: einmalig `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` in PowerShell ausführen, oder statt PowerShell die Eingabeaufforderung (`cmd`) benutzen.
+- *„Failed to automatically retrieve account IDs“*: die Account-ID selbst mitgeben, `$env:CLOUDFLARE_ACCOUNT_ID="DEINE-ID"` in PowerShell, dann `npm run setup` erneut starten. Die ID steht in der Adresszeile des Cloudflare-Dashboards direkt nach `dash.cloudflare.com/`.
+- Fragt Wrangler „Would you like Wrangler to add it on your behalf?“, antworte mit **n**. Das Setup trägt die Datenbank selbst ein.
+
+## Aktualisieren (jede spätere Änderung)
+
+Updates sind klein und fassen deine Daten nie an: Neue Datenbankspalten werden nur hinzugefügt, nie umbenannt oder entfernt.
+
+**Mit GitHub (empfohlen):** Änderungen committen und pushen, den Rest erledigt der automatische Deploy (siehe unten).
 
 ```sh
-git pull                 # or unzip the new version over this folder; .secrets.json stays
-npm install              # only needed when package.json changed
-npm run deploy           # finds your database, applies new migrations, deploys
+git add -A
+git commit -m "Beschreibung der Änderung"
+git push
 ```
 
-`npm run deploy` fills in your own database id and email (from `.secrets.json`) while deploying. `wrangler.jsonc` stays a clean template, so an update can never overwrite your values or ship the placeholders. If it cannot find your email it asks once and remembers it.
+**Von Hand**, ohne GitHub:
 
-Afterwards open **Einstellungen** in the app: it shows the version. Open apps reload themselves once when the server has a newer version, so nobody has to do anything on the phones.
+```sh
+git pull                 # oder die neue Version über diesen Ordner entpacken; .secrets.json bleibt
+npm install              # nur nötig, wenn sich package.json geändert hat
+npm run deploy           # findet deine Datenbank, wendet neue Migrationen an, deployt
+```
 
-**Going back:** `git checkout v1.1.0` (any tag from v1.1.0 on, see `git tag`), then `npm run deploy`. This rolls the code back, not the database; that is why migrations are additive, so older code keeps working with newer tables.
+`npm run deploy` setzt beim Deployen deine eigene Datenbank-ID und Mailadresse (aus `.secrets.json`) ein. `wrangler.jsonc` bleibt eine saubere Vorlage, ein Update kann also deine Werte nie überschreiben oder Platzhalter ausliefern. Findet es deine Mailadresse nicht, fragt es einmal nach und merkt sie sich.
 
-**On a new computer:** clone the repo, copy your `.secrets.json` into the folder, `npm install`, `npm run deploy`.
+Öffne danach in der App die **Einstellungen**: Dort steht die Version. Geöffnete Apps laden sich einmal von selbst neu, sobald der Server eine neuere Version hat. Auf den Handys muss also niemand etwas tun.
 
-## Automatic deploy (GitHub)
+**Zurückgehen:** `git checkout v1.1.0` (jeder Tag ab v1.1.0, siehe `git tag`), dann `npm run deploy`. Das setzt den Code zurück, nicht die Datenbank. Deshalb sind Migrationen nur additiv: Älterer Code funktioniert weiter mit neueren Tabellen.
 
-With this, every push to `main` goes live by itself: GitHub runs the tests, then deploys to Cloudflare, and the phones reload. You do nothing per update. One-time setup:
+**Auf einem neuen Computer:** Repo klonen, deine `.secrets.json` in den Ordner kopieren, `npm install`, `npm run deploy`.
 
-1. **Cloudflare API token:** dash.cloudflare.com → My Profile → API Tokens → Create Token → Create Custom Token. Permissions: *Account · Workers Scripts · Edit*, *Account · D1 · Edit*, *Account · Account Settings · Read*. Account Resources: your account. Copy the token once.
-2. **Account id:** dash.cloudflare.com → Workers & Pages → the "Account ID" in the right-hand column.
-3. **GitHub secrets:** in the repo → Settings → Secrets and variables → Actions → New repository secret. Create three: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `FREIGANG_EMAIL` (your real email, used as push contact).
-4. Push to `main`, or run the workflow by hand under the repo's Actions tab. The first deploy after the one-time `npm run setup` needs nothing else.
+## Automatischer Deploy (GitHub)
 
-If the workflow fails, the Actions tab shows the step and the message. A failing test stops the deploy, so the phones keep the last working version.
+Damit geht jeder Push auf `main` von selbst live: GitHub führt die Tests aus, deployt dann nach Cloudflare, und die Handys laden sich neu. Du musst pro Update nichts tun. Einmalige Einrichtung:
 
-## Install on the phones
+1. **Cloudflare-API-Token:** dash.cloudflare.com → My Profile → API Tokens → Create Token → Create Custom Token. Berechtigungen: *Account · Workers Scripts · Edit*, *Account · D1 · Edit*, *Account · Account Settings · Read*. Account Resources: dein Konto. Den Token einmalig kopieren.
+2. **Account-ID:** dash.cloudflare.com → Workers & Pages → „Account ID“ in der rechten Spalte (oder in der Adresszeile).
+3. **GitHub-Secrets:** im Repo unter Settings → Secrets and variables → Actions → New repository secret. Drei Stück anlegen: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `FREIGANG_EMAIL` (deine echte Mailadresse, dient als Kontakt für Push).
+4. Auf `main` pushen oder den Workflow im Tab Actions von Hand starten. Der erste Deploy nach dem einmaligen `npm run setup` braucht nichts weiter.
 
-**iPhone** (needs iOS 16.4 or newer; push only works for the installed app)
+Schlägt der Workflow fehl, zeigt der Tab Actions den Schritt und die Meldung. Ein fehlgeschlagener Test stoppt den Deploy, die Handys behalten dann die letzte funktionierende Version.
 
-1. Open the personal link in **Safari**.
-2. Share button, then **Zum Home-Bildschirm**.
-3. Open Freigang from the home screen. An installed iPhone app has its own storage, so it asks for the code once more. In Safari the first screen has a "Code kopieren" button; paste it in the installed app.
-4. Tap **Benachrichtigungen erlauben**.
+Das Repo sollte **privat** bleiben. Geheimnisse liegen nicht darin (`.secrets.json` steht in der `.gitignore`, die Tokens liegen in den GitHub-Secrets), aber es gibt keinen Grund, den Code öffentlich zu machen.
 
-**Android** (Chrome): open the link, menu, **App installieren**. The link logs in by itself; then allow notifications.
+## Auf den Handys installieren
 
-Tip: send each link in a private message. Anyone with the link can switch that person's cat.
+**iPhone** (ab iOS 16.4; Push funktioniert nur in der installierten App)
 
-## Daily use
+1. Den persönlichen Link in **Safari** öffnen.
+2. Teilen-Symbol, dann **Zum Home-Bildschirm**.
+3. Freigang vom Home-Bildschirm öffnen. Die installierte iPhone-App hat einen eigenen Speicher und fragt deshalb noch einmal nach dem Code. In Safari gibt es auf dem ersten Bildschirm den Knopf „Code kopieren“; füge den Code in der installierten App ein.
+4. **Benachrichtigungen erlauben** antippen.
 
-| Screen | What it does |
+**Android** (Chrome): Link öffnen, Menü, **App installieren**. Der Link meldet von selbst an; danach Benachrichtigungen erlauben.
+
+Tipp: Schick jeden Link in einer privaten Nachricht. Wer den Link hat, kann die Katze dieser Person schalten.
+
+## Täglicher Gebrauch
+
+| Ansicht | Was sie macht |
 | --- | --- |
-| Jetzt | Status banner, your cat with the big button and an optional note ("In Begleitung", "Nur kurz draußen" or your own text, up to 40 characters), the other cat read-only with its note, today's timeline |
-| Plan | Weekly slots per cat (any time of day, may run past midnight), reminder 15 min before, overlap warning |
-| Protokoll | Admin only: KPIs, day bands, heatmap, incidents with notes, CSV export, 7 or 30 days |
-| Settings (top right) | Notifications on/off, test message, sign out |
+| Jetzt | Statusbanner, deine Katze mit dem großen Knopf und einem optionalen Hinweis („In Begleitung“, „Nur kurz draußen“ oder eigener Text bis 40 Zeichen), die andere Katze nur lesbar mit ihrem Hinweis, der Verlauf von heute (0 bis 24 Uhr) |
+| Plan | Wochenfenster pro Katze (zu jeder Uhrzeit, auch über Mitternacht), Erinnerung 15 Min vorher, Hinweis bei Überschneidung |
+| Protokoll | Nur für den Admin: Kennzahlen, Tagesbänder, Heatmap, Vorfälle mit Notizen, CSV-Export, 7 oder 30 Tage |
+| Einstellungen (oben rechts) | Benachrichtigungen an/aus, Testnachricht, Abmelden |
 
-Messages are sent when the other cat goes out or comes in, when someone announces "in 15 min" (or cancels), when both are out, and when someone you wait for is back. Reminders and nudges ("time is up", "still outside after 3 h") pause during quiet hours.
+Nachrichten gibt es, wenn die andere Katze rausgeht oder reinkommt, wenn jemand „In 15 Min“ ankündigt (oder zurücknimmt), wenn beide draußen sind und wenn die Katze, auf die du wartest, wieder drin ist. Erinnerungen und Anstöße („Auf geht’s“, „Noch draußen?“ nach 5 Std) kommen standardmäßig auch nachts. Ruhezeiten lassen sich einstellen (siehe unten).
 
-## Settings you may want to change
+## Einstellungen, die du ändern kannst
 
-In `wrangler.jsonc` under `vars` (this is the one place where your own edits belong; commit them), then `npm run deploy`:
+In `wrangler.jsonc` unter `vars` (das ist der eine Ort für eigene Änderungen; committen), danach pushen oder `npm run deploy`:
 
-| Variable | Default | Meaning |
+| Variable | Standard | Bedeutung |
 | --- | --- | --- |
-| `TIMEZONE` | `Europe/Berlin` | Used for the plan, the day bands and the quiet hours |
-| `QUIET_START` / `QUIET_END` | `0` / `0` | No quiet hours: reminders and nudges also arrive at night. Set e.g. `22` / `6` to silence reminders and nudges in that window (status messages about the other cat are never silenced). |
-| `STALE_HOURS` | `5` | "Still outside?" nudge after this many hours, repeated every multiple |
+| `TIMEZONE` | `Europe/Berlin` | Gilt für den Plan, die Tagesbänder und die Ruhezeiten |
+| `QUIET_START` / `QUIET_END` | `0` / `0` | Keine Ruhezeiten: Erinnerungen und Anstöße kommen auch nachts. Mit z. B. `22` / `6` schweigen sie in diesem Zeitraum (Statusmeldungen über die andere Katze werden nie unterdrückt). |
+| `STALE_HOURS` | `5` | „Noch draußen?“ nach so vielen Stunden, danach bei jedem Vielfachen erneut |
 
-## Lost phone, link leaked, new device
+## Handy verloren, Link weitergegeben, neues Gerät
 
 ```sh
-npm run links -- --rotate kathrin    # or maxime
+npm run links -- --rotate kathrin    # oder maxime
 ```
 
-The old code stops working immediately; the command prints the new link. On a new phone just use the link again. Signing out in the app also removes that phone from push messages.
+Der alte Code funktioniert sofort nicht mehr, der Befehl druckt den neuen Link. Auf einem neuen Handy benutzt du einfach den Link noch einmal. Wer sich in der App abmeldet, wird auch aus den Push-Nachrichten dieses Handys entfernt.
 
-## If `npm run setup` does not work for you
+## Wenn `npm run setup` bei dir nicht klappt
 
-Do the same by hand:
+Dasselbe von Hand:
 
 ```sh
 npx wrangler login
-npx wrangler d1 create freigang          # copy the database_id into wrangler.jsonc
+npx wrangler d1 create freigang          # database_id in wrangler.jsonc eintragen
 npx wrangler d1 migrations apply freigang --remote
-npm run keys                             # prints four values
-npx wrangler secret put TOKEN_MAXIME     # paste the value, repeat for the other three:
+npm run keys                             # druckt vier Werte
+npx wrangler secret put TOKEN_MAXIME     # Wert einfügen, dasselbe für die anderen drei:
                                          # TOKEN_KATHRIN, VAPID_PUBLIC_KEY, VAPID_PRIVATE_JWK
 ```
 
-Put your real email into `VAPID_SUBJECT` in `wrangler.jsonc` (`mailto:you@example.com`), run `npx wrangler deploy` (not `npm run deploy`, which uses its own generated config), and open `https://freigang.<your-subdomain>.workers.dev/#k=<TOKEN_MAXIME>`.
+Trag deine echte Mailadresse bei `VAPID_SUBJECT` in `wrangler.jsonc` ein (`mailto:du@example.com`), führe `npx wrangler deploy` aus (nicht `npm run deploy`, das nutzt eine eigene erzeugte Konfiguration) und öffne `https://freigang.<deine-subdomain>.workers.dev/#k=<TOKEN_MAXIME>`.
 
-## Develop and test locally
+## Lokal entwickeln und testen
 
 ```sh
-npm run setup:local      # test codes in .dev.vars and a local database
+npm run setup:local      # Testcodes in .dev.vars und eine lokale Datenbank
 npm run dev              # http://localhost:8787
-npm test                 # in a second terminal, while "npm run dev" runs
+npm test                 # in einem zweiten Terminal, während "npm run dev" läuft
 ```
 
-The test talks to the running Worker and plays both people: authentication, status changes, the conflict guard on the server, waiting, backdating, the weekly plan, admin-only routes, the log maths, all cron nudges, and Web Push. Push messages are caught by a mock push service that decrypts them (RFC 8291) and verifies the VAPID signature, so the encryption and headers are checked against the standard rather than against the code itself.
+Der Test spricht mit dem laufenden Worker und spielt beide Personen: Anmeldung, Statuswechsel, die Konfliktsperre auf dem Server, Warten, Rückdatieren, den Wochenplan, Admin-only-Routen, die Protokoll-Rechnung, alle Cron-Anstöße und Web Push. Push-Nachrichten fängt ein Mock-Pushdienst ab, der sie wie ein Browser entschlüsselt (RFC 8291) und die VAPID-Signatur prüft. Verschlüsselung und Header werden also gegen den Standard geprüft und nicht gegen den eigenen Code.
 
-**Not covered by any test here:** real delivery through Apple's and Google's push services. Check it once on the real phones with Settings, "Testnachricht".
+**Von keinem Test hier abgedeckt:** die echte Zustellung über die Push-Dienste von Apple und Google. Prüf sie einmal auf den echten Handys mit Einstellungen, „Testnachricht“.
 
-## Limits of the free plan
+## Grenzen des kostenlosen Tarifs
 
-- 100,000 requests a day. An open app asks for updates every 15 seconds; two phones used all day stay far below that. The cron trigger adds 1,440 a day.
-- Free Workers get 10 ms of CPU per request. Encrypting and signing a push message takes a fraction of that, but if the logs ever show "exceeded CPU" errors, the Workers Paid plan (about 5 USD a month) lifts the limit.
-- Cloudflare's D1 free allowance is far larger than this app needs: a few dozen rows written a day, and every poll reads only a handful of rows through indexes (migration `0002_indexes.sql`).
+- 100.000 Anfragen pro Tag. Eine geöffnete App fragt alle 15 Sekunden nach Neuigkeiten; zwei Handys, die den ganzen Tag benutzt werden, bleiben weit darunter. Der Cron-Trigger fügt 1.440 pro Tag hinzu.
+- Kostenlose Workers bekommen 10 ms CPU pro Anfrage. Eine Push-Nachricht zu verschlüsseln und zu signieren braucht davon nur einen Bruchteil. Zeigen die Logs aber einmal „exceeded CPU“-Fehler, hebt der Tarif Workers Paid (etwa 5 USD im Monat) die Grenze auf.
+- Das kostenlose Kontingent von Cloudflare D1 ist weit größer, als diese App braucht: ein paar Dutzend geschriebene Zeilen pro Tag, und jede Abfrage liest nur eine Handvoll Zeilen über Indizes (Migration `0002_indexes.sql`).
 
-## Layout
+## Aufbau
 
 ```
-src/        Worker: api.js (routes, status rules), cron.js (reminders), push.js + webpush.js (Web Push), stats.js (log maths)
-public/     The app: index.html, app.js, style.css, sw.js (offline + push), manifest, icons, cat art, fonts
-migrations/ Database schema
-scripts/    setup, links, keys
-test/       Integration test with a mock push service
+src/        Worker: api.js (Routen, Statusregeln), cron.js (Erinnerungen), push.js + webpush.js (Web Push), stats.js (Protokoll-Rechnung)
+public/     Die App: index.html, app.js, style.css, sw.js (offline + Push), Manifest, Icons, Katzenbilder, Schriften
+migrations/ Datenbankschema
+scripts/    setup, links, keys, deploy
+test/       Integrationstest mit Mock-Pushdienst
 ```
-
-Fonts: Fraunces and DM Sans, SIL Open Font License (`public/fonts/LICENSE-*.txt`).

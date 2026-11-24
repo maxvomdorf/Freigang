@@ -2,7 +2,7 @@
 // "Outside" means status 'out'. 'soon' still counts as inside.
 import { CATS, zoned, localToUtc, MIN, HOUR } from './util.js';
 
-const AXIS_FROM = 5, AXIS_TO = 23; // ribbon axis, local hours
+const AXIS_FROM = 0, AXIS_TO = 24; // ribbon axis, local hours: the whole day (the cats are active at night too)
 
 /** Out-intervals per cat clipped to [from, to]. Open intervals end at `to`. Events must include the last one before `from`. */
 export function outIntervals(events, from, to) {

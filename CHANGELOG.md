@@ -1,22 +1,26 @@
-# Changelog
+# Änderungsprotokoll
+
+## 1.4.0
+- „Heute“, die Tagesbänder und die Heatmap im Protokoll zeigen jetzt den ganzen Tag (0 bis 24 Uhr) statt 5 bis 23 Uhr. Die Zeitangabe neben „Heute“ ist entfallen.
+- README und Änderungsprotokoll auf Deutsch.
 
 ## 1.3.1
-- Fix: the first-run screen showed the "notifications" step as a thin vertical bar (its CSS class clashed with the timeline marker).
+- Fix: Der Schritt „Benachrichtigungen“ in der Einrichtung erschien als schmaler senkrechter Balken (seine CSS-Klasse kollidierte mit der Marke im Zeitverlauf).
 
 ## 1.3.0
-- Automatic deploy: every push to `main` runs the tests on GitHub and then deploys to Cloudflare (`.github/workflows/deploy.yml`). `npm run deploy` still works by hand.
+- Automatischer Deploy: Jeder Push auf `main` führt die Tests auf GitHub aus und deployt dann nach Cloudflare (`.github/workflows/deploy.yml`). `npm run deploy` geht weiterhin von Hand.
 
 ## 1.2.1
-- Changing the note of a cat that is already out no longer weakens the earlier push: it keeps the "beide draußen" warning and the high urgency.
+- Wird der Hinweis einer Katze geändert, die schon draußen ist, schwächt das die frühere Push-Nachricht nicht mehr ab: Sie behält die Warnung „beide draußen“ und die hohe Dringlichkeit.
 
 ## 1.2.0
-- Short note on a cat's status: quick chips "In Begleitung" and "Nur kurz draußen", or your own text (up to 40 characters). Set it before the tap, or change it while the cat is announced or out. The neighbour sees it on the card and in the push message; a later change replaces the earlier notification quietly.
-- The note carries over from "In 15 Min" to "Jetzt raus", shows on incidents in the log and has its own CSV column.
-- No database migration needed (uses the existing `events.note` column). Older phones keep working and simply do not show the note.
+- Kurzer Hinweis am Status einer Katze: Schnellwahl „In Begleitung“ und „Nur kurz draußen“ oder eigener Text (bis 40 Zeichen). Vor dem Tippen setzbar oder änderbar, solange die Katze angekündigt oder draußen ist. Der Nachbar sieht ihn auf der Karte und in der Push-Nachricht; eine spätere Änderung ersetzt die frühere Benachrichtigung leise.
+- Der Hinweis wandert von „In 15 Min“ zu „Jetzt raus“, erscheint bei Vorfällen im Protokoll und hat eine eigene CSV-Spalte.
+- Keine Datenbank-Migration nötig (nutzt die vorhandene Spalte `events.note`). Ältere Handys funktionieren weiter und zeigen den Hinweis nur nicht an.
 
 ## 1.1.0
-- `npm run deploy` is now safe for updates: it finds your database, fills in your email, applies new database migrations and deploys. `wrangler.jsonc` stays a clean template.
-- The app shows its version in Einstellungen and reloads itself once when the server has a newer version.
+- `npm run deploy` ist jetzt sicher für Updates: Es findet deine Datenbank, trägt deine Mailadresse ein, wendet neue Datenbank-Migrationen an und deployt. `wrangler.jsonc` bleibt eine saubere Vorlage.
+- Die App zeigt ihre Version in den Einstellungen und lädt sich einmal von selbst neu, wenn der Server eine neuere Version hat.
 
 ## 1.0.0
-- First version: status for Ilford and Bonnie, push messages, conflict guard, weekly plan (also overnight), admin log.
+- Erste Version: Status für Ilford und Bonnie, Push-Nachrichten, Konfliktsperre, Wochenplan (auch über Nacht), Admin-Protokoll.

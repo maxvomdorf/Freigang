@@ -217,7 +217,7 @@ try {
   ok((await api('kathrin', 'GET', '/api/log')).status === 403, 'Kathrin cannot read the log');
   ok((await api('kathrin', 'PUT', '/api/note', { start: 1, note: 'x' })).status === 403, 'Kathrin cannot write notes');
   const log = await api('maxime', 'GET', '/api/log?days=7');
-  ok(log.status === 200 && log.body.rows.length === 7 && log.body.heat.ilford.length === 18, 'log has 7 day rows and 18 heat cells');
+  ok(log.status === 200 && log.body.rows.length === 7 && log.body.heat.ilford.length === 24, 'log has 7 day rows and 24 heat cells');
   ok(log.body.incidents.length === 1 && log.body.kpi.overlaps === 1 && log.body.kpi.overrides === 1, 'one overlap, from the forced exit: ' + JSON.stringify(log.body.kpi));
   ok(log.body.kpi.overlapMinutes >= 19 && log.body.kpi.overlapMinutes <= 21, 'overlap lasted about 20 min');
   const inc = log.body.incidents.find((i) => i.override) || {};

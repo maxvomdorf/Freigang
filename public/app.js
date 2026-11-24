@@ -1,6 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.3.1'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.4.0'; // same as src/version.js; a newer server version makes the app reload itself once
 const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -297,7 +297,7 @@ function otherCard() {
     </div></section>`;
 }
 
-function hoursRow(spacer, left = [5.56, 38.89, 72.22]) {
+function hoursRow(spacer, left = [25, 50, 75]) {
   return `<div class="hours"><i style="width:${spacer}px"></i><div>${[6, 12, 18].map((h, i) => `<span style="left:${left[i]}%">${h}</span>`).join('')}</div></div>`;
 }
 
@@ -306,7 +306,7 @@ function todayCard() {
   const rowTop = { [o]: 6, [t]: 28 };
   const segs = (cat) => T[cat].map((s) => `<div class="seg ${cat === 'ilford' ? 'il' : 'bo'}" style="top:${rowTop[cat]}px;height:10px;border-radius:5px;left:${s.l}%;width:${s.w}%"></div>`).join('');
   return `<section class="card" aria-label="Heute" style="gap:10px;padding-bottom:12px;border-radius:24px">
-    <div class="sec-head"><h3>Heute</h3><span class="small">5 – 23 Uhr</span></div>
+    <div class="sec-head"><h3>Heute</h3></div>
     <div class="strip-wrap">
       <div class="strip-heads" style="width:22px;padding-bottom:1px"><img src="${img(o, 'head')}" alt="${CATS[o].name}" width="22" height="22"><img src="${img(t, 'head')}" alt="${CATS[t].name}" width="22" height="22"></div>
       <div class="strip" style="height:44px">
@@ -412,7 +412,7 @@ function logView() {
       <section class="card" aria-label="Uhrzeiten" style="gap:10px;padding:16px;border-radius:24px">
         <div style="display:flex;flex-direction:column;gap:2px"><h2 style="font-size:20px">Wann sind sie draußen?</h2><span class="small">Je dunkler, desto öfter in diesen ${L.days} Tagen</span></div>
         ${heat('Ilford', L.heat.ilford, 'var(--ink)')}${heat('Bonnie', L.heat.bonnie, '#B9822F')}${heat('Gemeinsam', L.heat.ov, 'var(--ov)')}
-        ${hoursRow(72, [8.33, 41.67, 75])}</section>
+        ${hoursRow(72, [27.08, 52.08, 77.08])}</section>
       <section class="card" aria-label="Überschneidungen" style="padding:16px 16px 6px;gap:0;border-radius:24px">
         <div class="sec-head" style="padding-bottom:10px;align-items:center"><h2 style="font-size:20px">Überschneidungen</h2><span class="count ${L.kpi.overlaps ? '' : 'zero'}">${L.kpi.overlaps}</span></div>
         ${inc || `<p class="empty" style="padding-top:4px">Keine Überschneidungen in diesem Zeitraum.</p>`}
