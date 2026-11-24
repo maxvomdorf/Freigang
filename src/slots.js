@@ -29,3 +29,35 @@ export function minutesUntilStart(slot, weekday, minutes) {
   const d = ((slot.weekday * DAY_MIN + slot.start - (weekday * DAY_MIN + minutes)) % WEEK_MIN + WEEK_MIN) % WEEK_MIN;
   return d === 0 ? WEEK_MIN : d;
 }
+
+// ---- "Drinnen" entries: the cat will not be let out. Weekly (every week) or once (on one local date). ----
+// Dates are local calendar dates as 'YYYY-MM-DD'. Calendar maths runs on UTC midnights, so DST never shifts a day.
+const dayMs = 86400000;
+const utcDay = (iso) => Date.parse(iso + 'T00:00:00Z');
+/** The date `n` days after (or before, n < 0) a local date. */
+export const addDays = (iso, n) => new Date(utcDay(iso) + n * dayMs).toISOString().slice(0, 10);
+/** Weekday of a local date, 0 = Monday. */
+export const weekdayOf = (iso) => (new Date(utcDay(iso)).getUTCDay() + 6) % 7;
+/** The next date (today included) that falls on `weekday`. */
+export const nextDate = (iso, weekday) => addDays(iso, (weekday - weekdayOf(iso) + 7) % 7);
+/** Whole days between two local dates (b - a). */
+export const daysBetween = (a, b) => Math.round((utcDay(b) - utcDay(a)) / dayMs);
+
+/**
+ * Which "Drinnen" entry covers local date `iso` at `minute` (minutes after local midnight)? Entries look like
+ * { weekday, start, end, date } with date = null for weekly. An entry that runs past midnight (end > 1440) also covers the start of the next day.
+ * Returns { until, whole } or null: `until` = minutes after midnight of `iso` when the cover ends (> 1440 means tomorrow),
+ * `whole` = a full-day entry. With several matches the longest wins.
+ */
+export function insideAt(entries, iso, minute) {
+  const wd = weekdayOf(iso), prev = addDays(iso, -1), pwd = (wd + 6) % 7;
+  let best = null;
+  const take = (until, whole) => { if (!best || until > best.until) best = { until, whole }; };
+  for (const e of entries) {
+    if (e.date ? e.date === iso : e.weekday === wd) {
+      if (minute >= e.start && minute < e.end) take(e.end, e.start === 0 && e.end === DAY_MIN);
+    }
+    if (e.end > DAY_MIN && (e.date ? e.date === prev : e.weekday === pwd) && minute < e.end - DAY_MIN) take(e.end - DAY_MIN, false);
+  }
+  return best;
+}

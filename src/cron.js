@@ -3,7 +3,7 @@
 import { CATS, CAT_NAME, peopleOfCat, zoned, durText, isQuiet, numVar, HOUR, MIN } from './util.js';
 import { notifyUsers } from './push.js';
 import { lastEvents } from './db.js';
-import { minutesUntilStart } from './slots.js';
+import { minutesUntilStart, insideAt, addDays } from './slots.js';
 
 async function claim(env, key, now) {
   const r = await env.DB.prepare('INSERT OR IGNORE INTO sent_keys (key, ts) VALUES (?, ?)').bind(key, now).run();
@@ -22,12 +22,17 @@ export async function runCron(env, nowMs = Date.now()) {
   if (!quiet) {
     // 1. Plan reminders: from `remind` minutes before the window until it starts, once per occurrence.
     //    Counted on the whole week, so a window starting at 00:05 is announced from 23:50 the evening before.
-    const { results: slots } = await env.DB.prepare('SELECT * FROM schedule_slots').all();
+    //    "Drinnen" entries send nothing themselves. A one-off one on the day of an outside window cancels that window's reminder
+    //    when it covers the window's start.
+    const { results: all } = await env.DB.prepare('SELECT * FROM schedule_slots').all();
+    const slots = all.filter((s) => s.kind !== 'in');
+    const insideOf = (cat) => all.filter((s) => s.kind === 'in' && s.cat === cat).map((s) => ({ weekday: s.weekday, start: s.start_min, end: s.end_min, date: s.on_date }));
     const nowMin = Math.floor(nowMs / MIN);
     for (const s of slots) {
       const until = minutesUntilStart({ weekday: s.weekday, start: s.start_min }, z.weekday, z.minutes);
       if (until > s.remind_min) continue;
       if ((last[s.cat]?.status ?? 'in') !== 'in') continue;
+      if (insideAt(insideOf(s.cat), zoned(nowMs + until * MIN, tz).date, s.start_min)) continue;
       if (!(await claim(env, `rem:${s.id}:${nowMin + until}`, nowMs))) continue;
       const t = `${String(Math.floor(s.start_min / 60)).padStart(2, '0')}:${String(s.start_min % 60).padStart(2, '0')}`;
       await notifyUsers(env, peopleOfCat(s.cat), {
@@ -62,6 +67,7 @@ export async function runCron(env, nowMs = Date.now()) {
   // 4. Housekeeping once a night.
   if (z.hour === 4 && z.minute === 0) {
     await env.DB.prepare('DELETE FROM sent_keys WHERE ts < ?').bind(nowMs - 7 * 24 * HOUR).run();
+    await env.DB.prepare('DELETE FROM schedule_slots WHERE on_date IS NOT NULL AND on_date < ?').bind(addDays(z.date, -2)).run();
   }
   return sent;
 }

@@ -6,7 +6,7 @@ import { feedingRoutes, feedingOut, lastFeeding } from './feeding.js';
 import { notifyUser, notifyUsers } from './push.js';
 import { buildLog, todayStrip } from './stats.js';
 import { lastEvents, eventsSince } from './db.js';
-import { normalize, overlapsWeek } from './slots.js';
+import { normalize, overlapsWeek, nextDate, addDays, daysBetween, insideAt, DAY_MIN } from './slots.js';
 import { VERSION } from './version.js';
 import { NOTE_STATUSES, normalizeNote, noteForNewEvent } from './note.js';
 
@@ -49,11 +49,18 @@ async function buildState(env, me, now) {
   const dayFrom = localToUtc(z.year, z.month, z.day, 0, 0, tz);
   const ev = await eventsSince(env, dayFrom);
   const theirs = peopleOfCat(otherCat(me.cat));
-  const [watch, devices, prefs] = await env.DB.batch([
+  const [watch, devices, prefs, inside] = await env.DB.batch([
     env.DB.prepare('SELECT 1 FROM watches WHERE user = ? AND cat = ?').bind(me.user, otherCat(me.cat)),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions WHERE user IN (${theirs.map(() => '?').join(',')})`).bind(...theirs),
     env.DB.prepare('SELECT own_push, feed_push FROM user_prefs WHERE user = ?').bind(me.user),
+    env.DB.prepare("SELECT cat, weekday, start_min, end_min, on_date FROM schedule_slots WHERE kind = 'in'"),
   ]);
+  // Is a cat planned to stay inside right now? (the plan's "Drinnen" entries; until = minutes after today's midnight)
+  const insideNow = {};
+  for (const cat of CATS) {
+    const entries = inside.results.filter((r) => r.cat === cat).map((r) => ({ weekday: r.weekday, start: r.start_min, end: r.end_min, date: r.on_date }));
+    insideNow[cat] = insideAt(entries, z.date, z.minutes);
+  }
   // Feeding tracker data exists only for Bonnie's household.
   const feeds = me.cat === FEED_CAT;
   const lastFeed = feeds ? await lastFeeding(env) : null;
@@ -64,6 +71,7 @@ async function buildState(env, me, now) {
     prefs: { ownPush: (prefs.results[0]?.own_push ?? 1) === 1, ...(feeds ? { feedPush: (prefs.results[0]?.feed_push ?? 1) === 1 } : {}) },
     ...(feeds ? { feeding: { last: lastFeed ? feedingOut(lastFeed, me, now) : null, hintMin: FEED_HINT_MIN, undoMin: FEED_UNDO_MIN } } : {}),
     cats: { ilford: catState(last.ilford), bonnie: catState(last.bonnie) },
+    insideNow,
     waiting: watch.results.length > 0,
     today: todayStrip({ events: ev, now, tz }),
     quietHours: { start: numVar(env.QUIET_START, 22), end: numVar(env.QUIET_END, 6) },
@@ -182,25 +190,57 @@ async function noteOnStatus(env, ctx, me, body) {
 // ---------- plan ----------
 
 const slotOut = (r) => ({ id: r.id, cat: r.cat, weekday: r.weekday, start: r.start_min, end: r.end_min, remind: r.remind_min });
+const insideOut = (r) => ({ id: r.id, cat: r.cat, weekday: r.weekday, start: r.start_min, end: r.end_min, date: r.on_date });
 
-async function overlapsOwn(env, cat, weekday, start, end, exceptId = 0) {
-  const { results } = await env.DB.prepare('SELECT weekday, start_min, end_min FROM schedule_slots WHERE cat = ? AND id != ?').bind(cat, exceptId).all();
-  return results.some((r) => overlapsWeek({ weekday, start, end }, { weekday: r.weekday, start: r.start_min, end: r.end_min }));
+/**
+ * The first of the cat's own entries that `cand` ({ kind, weekday, start, end, date }) may not overlap, or null.
+ * Weekly entries (outside or inside) never overlap each other. A one-off "Drinnen" entry may sit on top of a weekly outside window
+ * (that is its point: this time the cat stays in) but not on another inside entry, one-off or weekly. A new weekly entry ignores one-offs.
+ */
+async function conflictOwn(env, cat, cand, exceptId = 0) {
+  const { results } = await env.DB.prepare('SELECT id, kind, weekday, start_min, end_min, on_date FROM schedule_slots WHERE cat = ? AND id != ?').bind(cat, exceptId).all();
+  const week = (e) => ({ weekday: e.weekday, start: e.start_min, end: e.end_min });
+  for (const e of results) {
+    if (cand.date) {
+      if (e.kind !== 'in') continue;
+      if (e.on_date) {
+        const off = daysBetween(cand.date, e.on_date) * DAY_MIN;
+        if (cand.start < off + e.end_min && cand.end > off + e.start_min) return e;
+      } else if (overlapsWeek(cand, week(e))) return e;
+    } else if (!e.on_date && overlapsWeek(cand, week(e))) return e;
+  }
+  return null;
 }
 
-async function planRoutes(request, env, me, path) {
+const conflict409 = (e, weekday) => json({ error: 'overlap_own', with: e.kind, weekday }, 409);
+
+async function planRoutes(request, env, me, path, now) {
+  const tz = tzOf(env), today = zoned(now, tz).date;
   if (request.method === 'GET') {
-    const { results } = await env.DB.prepare('SELECT * FROM schedule_slots ORDER BY weekday, start_min').all();
-    return json({ slots: results.map(slotOut) });
+    const [out, ins] = await env.DB.batch([
+      env.DB.prepare("SELECT * FROM schedule_slots WHERE kind = 'out' ORDER BY weekday, start_min"),
+      // one-offs stay listed until the day after they ended (an entry can run past midnight)
+      env.DB.prepare("SELECT * FROM schedule_slots WHERE kind = 'in' AND (on_date IS NULL OR on_date >= ?) ORDER BY weekday, start_min").bind(addDays(today, -1)),
+    ]);
+    return json({ slots: out.results.map(slotOut), inside: ins.results.map(insideOut), today });
   }
   if (request.method === 'POST') {
     const b = await request.json().catch(() => ({}));
+    const kind = b.kind === undefined ? 'out' : b.kind;
+    if (kind !== 'out' && kind !== 'in') return json({ error: 'bad_slot' }, 400);
+    const once = b.once === true;
+    if (once && kind !== 'in') return json({ error: 'bad_slot' }, 400);
     const days = [...new Set((Array.isArray(b.weekdays) ? b.weekdays : []).map(Number))].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
-    const t = normalize(Number(b.start), Number(b.end));
+    const t = kind === 'in' && b.allDay === true ? normalize(0, DAY_MIN) : normalize(Number(b.start), Number(b.end));
     if (!days.length || !t) return json({ error: 'bad_slot' }, 400);
     const { start, end } = t;
-    for (const d of days) if (await overlapsOwn(env, me.cat, d, start, end)) return json({ error: 'overlap_own', weekday: d }, 409);
-    await env.DB.batch(days.map((d) => env.DB.prepare('INSERT INTO schedule_slots (cat, weekday, start_min, end_min, remind_min) VALUES (?, ?, ?, ?, 15)').bind(me.cat, d, start, end)));
+    // A one-off entry lands on the next date (today included) that falls on each chosen weekday.
+    const rows = days.map((d) => ({ weekday: d, date: once ? nextDate(today, d) : null }));
+    for (const r of rows) {
+      const hit = await conflictOwn(env, me.cat, { kind, weekday: r.weekday, start, end, date: r.date });
+      if (hit) return conflict409(hit, r.weekday);
+    }
+    await env.DB.batch(rows.map((r) => env.DB.prepare('INSERT INTO schedule_slots (cat, weekday, start_min, end_min, remind_min, kind, on_date) VALUES (?, ?, ?, ?, 15, ?, ?)').bind(me.cat, r.weekday, start, end, kind, r.date)));
     return json({ ok: true });
   }
   const id = Number(path.split('/')[3]);
@@ -213,10 +253,11 @@ async function planRoutes(request, env, me, path) {
   }
   if (request.method === 'PUT') {
     const b = await request.json().catch(() => ({}));
-    const t = normalize(Number(b.start), Number(b.end));
+    const t = row.kind === 'in' && b.allDay === true ? normalize(0, DAY_MIN) : normalize(Number(b.start), Number(b.end));
     if (!t) return json({ error: 'bad_slot' }, 400);
     const { start, end } = t;
-    if (await overlapsOwn(env, me.cat, row.weekday, start, end, id)) return json({ error: 'overlap_own' }, 409);
+    const hit = await conflictOwn(env, me.cat, { kind: row.kind, weekday: row.weekday, start, end, date: row.on_date }, id);
+    if (hit) return conflict409(hit, row.weekday);
     await env.DB.prepare('UPDATE schedule_slots SET start_min = ?, end_min = ? WHERE id = ?').bind(start, end, id).run();
     return json({ ok: true });
   }
@@ -303,7 +344,7 @@ export async function handleApi(request, env, ctx) {
       }
     }
 
-    if (path === '/api/plan' || path.startsWith('/api/plan/')) return planRoutes(request, env, me, path);
+    if (path === '/api/plan' || path.startsWith('/api/plan/')) return planRoutes(request, env, me, path, now);
     if (path === '/api/feedings' || path.startsWith('/api/feedings/')) return feedingRoutes(request, env, ctx, me, url, now, tzOf(env));
     if (path === '/api/push' || path === '/api/push/test') return pushRoutes(request, env, me, path);
     if (path === '/api/prefs' && m === 'PUT') {

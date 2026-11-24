@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createECDH, createPublicKey, verify, randomBytes } from 'node:crypto';
 import { decrypt } from './push-crypto.mjs';
+import { nextDate, addDays, weekdayOf } from '../src/slots.js';
 
 const BASE = process.env.BASE || 'http://localhost:8787';
 const vars = Object.fromEntries(readFileSync('.dev.vars', 'utf8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
@@ -168,9 +169,12 @@ try {
   const g = (t) => z.find((x) => x.type === t).value;
   const wd = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[g('weekday')];
   const nowMin = +g('hour') * 60 + +g('minute');
-  const start = Math.ceil((nowMin + 6) / 5) * 5;
+  // From 23:00 on, a window that starts in 6-10 minutes would begin after midnight (or on the next weekday), so the reminder checks
+  // are skipped then (printed) and the slot goes to 10:00 instead. Otherwise a push late in the evening would turn CI red and stop the deploy.
+  const lateEve = nowMin >= 1380;
+  const start = lateEve ? 600 : Math.ceil((nowMin + 6) / 5) * 5;
   r = await api('maxime', 'POST', '/api/plan', { weekdays: [wd], start, end: start + 30 });
-  ok(r.status === 200 && start + 30 <= 1380, 'slot created for today');
+  ok(r.status === 200 && start + 45 <= 1440, 'slot created for today');
   ok((await api('maxime', 'POST', '/api/plan', { weekdays: [wd], start: start + 10, end: start + 20 })).status === 409, 'own overlapping slot rejected');
   const slots = (await api('kathrin', 'GET', '/api/plan')).body.slots;
   ok(slots.length === 1 && slots[0].cat === 'ilford', 'Kathrin sees Ilford\'s slot');
@@ -187,14 +191,16 @@ try {
   ok((await api('kathrin', 'POST', '/api/plan', { weekdays: [dA], start: 23 * 60, end: 30 })).status === 200, 'Bonnie can have an overlapping overnight window');
   for (const x of (await api('maxime', 'GET', '/api/plan')).body.slots.filter((x) => x.weekday !== wd)) await api(x.cat === 'ilford' ? 'maxime' : 'kathrin', 'DELETE', '/api/plan/' + x.id);
   ok((await api('maxime', 'GET', '/api/plan')).body.slots.length === 1, 'night test windows removed again');
-  ok(start - 10 <= nowMin + 10 && start > nowMin, 'slot starts within the next 10 min (reminder window)');
+  if (lateEve) console.log('  skip  slot starts within the next 10 min (late evening)');
+  else ok(start - 10 <= nowMin + 10 && start > nowMin, 'slot starts within the next 10 min (reminder window)');
 
   console.log('cron');
   const cron = async () => (await fetch(BASE + '/__scheduled?cron=*+*+*+*+*')).status;
   ok((await cron()) === 200, 'scheduled handler runs');
   await sleep(1500); p = drain();
   const hr = new Date().getHours();
-  ok(p.some((x) => x.user === 'maxime' && /Ilford darf raus/.test(x.msg.title)), 'Maxime got the plan reminder');
+  if (lateEve) console.log('  skip  plan reminder reaches Maxime (late evening)');
+  else ok(p.some((x) => x.user === 'maxime' && /Ilford darf raus/.test(x.msg.title)), 'Maxime got the plan reminder');
   await cron(); await sleep(1000); p = drain();
   ok(!p.some((x) => /darf raus/.test(x.msg.title)), 'reminder not sent twice');
 
@@ -275,6 +281,135 @@ try {
   ok(who(p.filter((x) => /Noch draußen/.test(x.msg?.title))) === 'janin,maxime', '"Noch draußen?" goes to everybody who looks after Ilford: ' + who(p));
   ok((await api('janin', 'POST', '/api/plan', { weekdays: [3], start: 600, end: 660 })).status === 200 && (await api('maxime', 'GET', '/api/plan')).body.slots.some((x) => x.cat === 'ilford'), 'Janin can plan Ilford\'s windows');
   sql('DELETE FROM schedule_slots;');
+
+  console.log('plan: drinnen bleiben');
+  sql('DELETE FROM events; DELETE FROM watches; DELETE FROM sent_keys; DELETE FROM schedule_slots;'); drain();
+  const berlin = () => {
+    const f = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short' }).formatToParts(new Date());
+    const q = (t) => f.find((x) => x.type === t).value;
+    return { wd: { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[q('weekday')], min: +q('hour') * 60 + +q('minute') };
+  };
+  const plan = async (who2) => (await api(who2, 'GET', '/api/plan')).body;
+  const now0 = berlin();
+  if (now0.min >= 1430 || now0.min < 3) console.log('  skip  (too close to midnight: the date could change during the test)');
+  else {
+    const pl0 = await plan('linus');
+    ok(Array.isArray(pl0.slots) && Array.isArray(pl0.inside) && /^\d{4}-\d{2}-\d{2}$/.test(pl0.today) && weekdayOf(pl0.today) === now0.wd, 'plan answer carries {slots, inside, today}: ' + pl0.today);
+    const today = pl0.today, tomorrow = addDays(today, 1), wdT = (now0.wd + 1) % 7;
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [now0.wd], once: true, allDay: true })).status === 200, 'Linus plans Bonnie inside for today (one-off, all day)');
+    let pi = (await plan('maxime')).inside;
+    ok(pi.length === 1 && pi[0].cat === 'bonnie' && pi[0].date === today && pi[0].weekday === now0.wd && pi[0].start === 0 && pi[0].end === 1440, 'stored as a dated entry 0:00–24:00, and Maxime sees it: ' + JSON.stringify(pi[0]));
+    ok((await plan('maxime')).slots.length === 0, 'inside entries do not show up among the outside windows');
+    let ist = (await api('maxime', 'GET', '/api/state')).body.insideNow;
+    ok(ist.bonnie?.whole === true && ist.bonnie.until === 1440 && ist.ilford === null, 'state: Bonnie planned inside the whole day, Ilford not: ' + JSON.stringify(ist));
+    const o2 = await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [now0.wd], once: true, start: 600, end: 660 });
+    ok(o2.status === 409 && o2.body.error === 'overlap_own' && o2.body.with === 'in' && o2.body.weekday === now0.wd, 'a second one-off on the same day overlaps the first (with: in): ' + JSON.stringify(o2.body));
+    ok((await api('maxime', 'POST', '/api/plan', { kind: 'in', weekdays: [now0.wd], once: true, allDay: true })).status === 200, 'the other cat may have its own entry on the same day');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [now0.wd], once: true, start: 600, end: 660 })).status === 409 && (await plan('linus')).inside.length === 2, 'nothing was stored by the rejected call');
+    sql('DELETE FROM schedule_slots;');
+
+    // validation
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'weg', weekdays: [1], start: 600, end: 660 })).status === 400, 'unknown kind: 400');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'out', weekdays: [1], once: true, start: 600, end: 660 })).status === 400, 'a one-off outside window does not exist: 400');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [1] })).status === 400, 'inside without times and without allDay: 400');
+    ok((await api('linus', 'POST', '/api/plan', { weekdays: [1], start: 600, end: 660 })).status === 200 && (await plan('linus')).slots.length === 1, 'a request without kind still creates an outside window (old clients)');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'out', weekdays: [1], allDay: true })).status === 400, 'allDay is for inside entries only');
+    sql('DELETE FROM schedule_slots;');
+
+    // weekly vs weekly, one-off on top of a weekly outside window
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'out', weekdays: [2], start: 600, end: 720 })).status === 200, 'weekly outside window Wed 10:00–12:00');
+    const wi = await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [2], start: 660, end: 780 });
+    ok(wi.status === 409 && wi.body.with === 'out', 'a weekly inside entry may not overlap a weekly outside window (with: out)');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [2], start: 720, end: 780 })).status === 200, 'weekly inside entry right after it is fine');
+    const wo = await api('linus', 'POST', '/api/plan', { kind: 'out', weekdays: [2], start: 730, end: 770 });
+    ok(wo.status === 409 && wo.body.with === 'in', 'and the other way round (with: in)');
+    const wnext = (await plan('linus')).inside.find((x) => x.date === null);
+    ok((await api('linus', 'PUT', '/api/plan/' + wnext.id, { start: 700, end: 780 })).status === 409, 'editing a weekly entry into the outside window is rejected as well');
+    ok((await api('linus', 'PUT', '/api/plan/' + wnext.id, { allDay: true })).status === 409, 'a weekly entry made all-day would overlap the window: rejected');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [2], once: true, start: 630, end: 690 })).status === 200, 'a one-off inside entry may sit on a weekly outside window (that cancels it)');
+    const ow = await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [2], once: true, start: 700, end: 760 });
+    ok(ow.status === 409 && ow.body.with === 'in', 'a one-off may not overlap a weekly inside entry (it would be pointless): ' + JSON.stringify(ow.body));
+    const dWed = nextDate(today, 2);
+    const ones = (await plan('linus')).inside.filter((x) => x.date);
+    ok(ones.length >= 1 && ones.every((x) => x.date === dWed), 'the one-off lands on the next Wednesday: ' + dWed);
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [2], once: true, start: 640, end: 650 })).status === 409, 'one-offs may not overlap each other');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [2], start: 800, end: 900 })).status === 200, 'a new weekly entry ignores the one-offs');
+    const keepW = (await plan('linus')).inside.filter((x) => x.date).map((x) => x.id);
+    ok((await api('oskar', 'DELETE', '/api/plan/' + keepW[0])).status === 200, 'every person of the household may delete the cat\'s entries');
+    ok((await api('maxime', 'DELETE', '/api/plan/' + keepW[0])).status === 404, 'already gone: 404');
+    sql('DELETE FROM schedule_slots;');
+    // overnight one-off covers the start of the next day
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [now0.wd], once: true, start: 22 * 60, end: 2 * 60 })).status === 200, 'overnight one-off 22:00–02:00 accepted');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [wdT], once: true, start: 60, end: 120 })).status === 409, '...and it blocks an entry in its night hours on the next day');
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [wdT], once: true, start: 120, end: 180 })).status === 200, '...while one right after it is fine');
+    sql('DELETE FROM schedule_slots;');
+
+    // the one-off cancels an outside window's reminder (when it covers the window's start), per cat
+    // (from 23:00 on a window starting in 6-10 minutes would begin after midnight: skipped then, so a late push does not turn CI red)
+    const ref = berlin();
+    if (ref.min >= 1380) console.log('  skip  reminder checks (late evening)');
+    else {
+      const wS = Math.ceil((ref.min + 6) / 5) * 5; // an outside window starting in 6–10 minutes
+      ok(wS + 20 <= 1380, 'test window starts today at ' + wS);
+      ok((await api('linus', 'POST', '/api/plan', { kind: 'out', weekdays: [ref.wd], start: wS, end: wS + 20 })).status === 200, 'Bonnie\'s outside window starts in a few minutes');
+      const cronOnce = async () => { await fetch(BASE + '/__scheduled?cron=*+*+*+*+*'); await sleep(1500); return drain(); };
+      const remFor = (list) => list.filter((x) => /darf raus/.test(x.msg?.title || ''));
+      ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [ref.wd], once: true, start: Math.max(0, wS - 30), end: wS + 10 })).status === 200, 'Linus plans Bonnie inside around that window (one-off)');
+      ok((await api('maxime', 'POST', '/api/plan', { kind: 'in', weekdays: [ref.wd], once: true, allDay: true })).status === 200, 'Maxime plans Ilford inside the whole day (other cat)');
+      ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [wdT], once: true, allDay: true })).status === 200, 'Linus also plans tomorrow inside');
+      let pc = await cronOnce();
+      ok(remFor(pc).length === 0, 'the covered window sends no reminder: ' + JSON.stringify(remFor(pc).map((x) => x.msg.title)));
+      const bonnieIn = (await plan('linus')).inside.find((x) => x.cat === 'bonnie' && x.date === today && x.end === wS + 10);
+      await api('linus', 'DELETE', '/api/plan/' + bonnieIn.id);
+      // an entry that ends before the window starts does not cancel it, and neither does another day or the other cat
+      ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [ref.wd], once: true, start: Math.max(0, wS - 120), end: wS })).status === 200, 'inside until exactly the window start: the entry ends where the window begins');
+      pc = await cronOnce();
+      ok(who(remFor(pc)) === 'annalena,kathrin,linus,oskar', 'then the reminder goes out to Bonnie\'s household (Ilford\'s all-day entry and tomorrow\'s entry do not matter): ' + who(remFor(pc)));
+      pc = await cronOnce();
+      ok(remFor(pc).length === 0, 'reminder not sent twice');
+      sql('DELETE FROM schedule_slots; DELETE FROM sent_keys;'); drain();
+
+      // weekly inside entries send nothing and change nothing for the window of another day
+      ok((await api('linus', 'POST', '/api/plan', { kind: 'out', weekdays: [ref.wd], start: wS, end: wS + 20 })).status === 200, 'window again');
+      ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [(ref.wd + 3) % 7], allDay: true })).status === 200, 'weekly all-day inside entry on another weekday');
+      pc = await cronOnce();
+      ok(who(remFor(pc)) === 'annalena,kathrin,linus,oskar', 'a weekly inside entry on another weekday leaves the reminder alone: ' + who(remFor(pc)));
+      sql('DELETE FROM schedule_slots; DELETE FROM sent_keys;'); drain();
+    }
+
+    // a weekly inside entry covering the window start cannot be created (409), so only one-offs cancel
+    // "state.insideNow" with a timed entry: until = end of the entry
+    const nowB = berlin();
+    if (nowB.min < 1437) {
+      sql(`INSERT INTO schedule_slots (cat, weekday, start_min, end_min, remind_min, kind, on_date) VALUES ('bonnie', ${nowB.wd}, 0, 1439, 15, 'in', NULL)`);
+      ist = (await api('kathrin', 'GET', '/api/state')).body.insideNow;
+      ok(ist.bonnie?.whole === false && ist.bonnie.until === 1439 && ist.ilford === null, 'weekly entry 0:00–23:59 gives until=1439, not whole: ' + JSON.stringify(ist));
+    }
+    sql('DELETE FROM schedule_slots;');
+    sql(`INSERT INTO schedule_slots (cat, weekday, start_min, end_min, remind_min, kind, on_date) VALUES ('bonnie', ${(nowB.wd + 6) % 7}, 1380, 1560, 15, 'in', NULL)`);
+    if (nowB.min < 120) {
+      ist = (await api('kathrin', 'GET', '/api/state')).body.insideNow;
+      ok(ist.bonnie?.until === 120 && ist.bonnie.whole === false, 'an overnight entry from yesterday still covers the early morning (until 02:00): ' + JSON.stringify(ist.bonnie));
+    } else {
+      ok((await api('kathrin', 'GET', '/api/state')).body.insideNow.bonnie === null, 'yesterday\'s overnight entry does not cover the afternoon');
+    }
+    sql('DELETE FROM schedule_slots;');
+
+    // plan entries never create a "both outside" warning, and "Drinnen" does not block letting the cat out
+    ok((await api('linus', 'POST', '/api/plan', { kind: 'in', weekdays: [now0.wd], once: true, allDay: true })).status === 200, 'Bonnie planned inside today');
+    const outAnyway = await api('linus', 'POST', '/api/status', { to: 'out' });
+    ok(outAnyway.status === 200 && outAnyway.body.state.cats.bonnie.status === 'out' && outAnyway.body.state.insideNow.bonnie !== null, 'the server lets Bonnie out anyway (the plan only informs): ' + outAnyway.status);
+    await sleep(1000); drain();
+    await api('linus', 'POST', '/api/status', { to: 'in' }); await sleep(800); drain();
+    // housekeeping statement (runs at 04:00 local): removes one-offs older than two days, keeps yesterday and weekly entries
+    sql('DELETE FROM schedule_slots;');
+    sql(`INSERT INTO schedule_slots (cat, weekday, start_min, end_min, remind_min, kind, on_date) VALUES ('bonnie', 0, 0, 1440, 15, 'in', '${addDays(today, -3)}'), ('bonnie', 0, 0, 1440, 15, 'in', '${addDays(today, -2)}'), ('bonnie', 0, 0, 1440, 15, 'in', '${addDays(today, -1)}'), ('bonnie', 0, 0, 1440, 15, 'in', NULL)`);
+    sql(`DELETE FROM schedule_slots WHERE on_date IS NOT NULL AND on_date < '${addDays(today, -2)}'`);
+    ok(JSON.parse(sql('SELECT COUNT(*) AS n FROM schedule_slots'))[0].results[0].n === 3, 'housekeeping statement keeps the last two days and weekly entries');
+    const listed = (await plan('linus')).inside.filter((x) => x.date);
+    ok(listed.length === 1 && listed[0].date === addDays(today, -1), 'the plan list shows one-offs only from yesterday on (older ones are filtered even before the cleanup): ' + listed.map((x) => x.date));
+    sql('DELETE FROM schedule_slots; DELETE FROM sent_keys; DELETE FROM events;'); drain();
+  }
 
   console.log('feeding tracker (Bonnie\'s household only)');
   sql('DELETE FROM feedings; DELETE FROM user_prefs; DELETE FROM sent_keys;'); drain();

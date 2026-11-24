@@ -1,6 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.6.1'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.7.0'; // same as src/version.js; a newer server version makes the app reload itself once
 const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -45,7 +45,7 @@ const store = {
 // ---------- state ----------
 const S = {
   code: '', state: null, skew: 0, tz: 'Europe/Berlin', online: true, view: 'loading',
-  plan: null, planDay: 0, log: null, logDays: 7, logAll: false, feed: null,
+  plan: null, inside: [], planToday: '', planDay: 0, log: null, logDays: 7, logAll: false, feed: null,
   noteDraft: '', sheet: null, toast: '', busy: false, loginError: '', loginBusy: false,
   push: { supported: false, perm: 'default', subscribed: false }, installEvent: null, confirmLogout: false,
 };
@@ -131,7 +131,7 @@ async function refresh() {
   } catch { S.online = false; }
   render();
 }
-async function loadPlan() { const r = await api('GET', '/api/plan'); if (r.ok) S.plan = r.data.slots; }
+async function loadPlan() { const r = await api('GET', '/api/plan'); if (r.ok) { S.plan = r.data.slots; S.inside = r.data.inside || []; S.planToday = r.data.today || ''; } }
 async function loadFeed() { const r = await api('GET', '/api/feedings?days=7'); if (r.ok) S.feed = r.data.feedings; }
 async function loadLog() { const r = await api('GET', `/api/log?days=${S.logDays}`); if (r.ok) S.log = r.data; }
 
@@ -246,6 +246,14 @@ function banner() {
   return `<div class="banner tone-${tone}" role="status"><div class="ico">${ic(icon)}</div><div class="t"><b>${esc(title)}</b><span>${esc(sub)}</span></div></div>`;
 }
 
+// "Bleibt laut Plan … drinnen": shown while the cat is inside and a Drinnen entry of the plan covers now.
+function insideLine(cat) {
+  const n = S.state.insideNow?.[cat];
+  if (!n || S.state.cats[cat].status !== 'in') return '';
+  const when = n.whole ? 'heute' : n.until > 1440 ? `bis morgen ${minToText(n.until - 1440)} Uhr` : n.until === 1440 ? 'bis Mitternacht' : `bis ${minToText(n.until)} Uhr`;
+  return `<span class="notepill plan">${ic('home', 14)}<span>Bleibt laut Plan ${when} drinnen</span></span>`;
+}
+
 function ownCard() {
   const C = S.state.cats, o = ownCat(), t = otherCat(), c = C[o], tn = CATS[t].name, partner = me().otherName;
   const dis = S.busy ? 'disabled' : '';
@@ -277,6 +285,7 @@ function ownCard() {
         <h2 class="name-l">${CATS[o].name}</h2>
         ${statusChip(c.status)}
         <span class="meta">${esc(meta)}</span>
+        ${insideLine(o)}
       </div>
     </div>${bar}${noteChips(c)}<div class="actions">${actions}</div></section>`;
 }
@@ -297,6 +306,7 @@ function otherCard() {
     <div class="stack" style="flex:1">
       <div class="row" style="gap:10px;flex-wrap:wrap"><h2 class="name-m">${CATS[t].name}</h2>${statusChip(c.status, 'sm')}</div>
       <span class="meta">${esc(meta)}</span>
+      ${insideLine(t)}
       ${c.note ? `<span class="notepill">${ic('info', 14)}<span>${esc(c.note)}</span></span>` : ''}
       <span class="lock">${ic('lock', 14)} Status setzt ${esc(me().otherName)}</span>
     </div></section>`;
@@ -329,27 +339,63 @@ function homeView() {
 }
 
 // ----- plan -----
-// A window belongs to the weekday it starts on and may run past midnight (end > 1440). On the next day it shows as a carried-over segment.
-function dayPlan() {
-  const day = S.planDay, segs = [];
-  for (const s of S.plan || []) {
-    if (s.weekday === day) segs.push({ s, start: s.start, end: Math.min(s.end, 1440), carried: false });
-    if (s.end > 1440 && (s.weekday + 1) % 7 === day) segs.push({ s, start: 0, end: s.end - 1440, carried: true });
+// ---- calendar helpers: a copy of the ones in src/slots.js (test/slots.test.mjs checks that both give the same results) ----
+const DAY_MIN = 1440;
+const addDays = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+const weekdayOf = (iso) => (new Date(iso + 'T00:00:00Z').getUTCDay() + 6) % 7;
+const nextDate = (iso, weekday) => addDays(iso, (weekday - weekdayOf(iso) + 7) % 7);
+function insideAt(entries, iso, minute) {
+  const wd = weekdayOf(iso), prev = addDays(iso, -1), pwd = (wd + 6) % 7;
+  let best = null;
+  const take = (until, whole) => { if (!best || until > best.until) best = { until, whole }; };
+  for (const e of entries) {
+    if (e.date ? e.date === iso : e.weekday === wd) {
+      if (minute >= e.start && minute < e.end) take(e.end, e.start === 0 && e.end === DAY_MIN);
+    }
+    if (e.end > DAY_MIN && (e.date ? e.date === prev : e.weekday === pwd) && minute < e.end - DAY_MIN) take(e.end - DAY_MIN, false);
   }
+  return best;
+}
+// ---- end of the copy ----
+const dateLabel = (iso) => `${WD[weekdayOf(iso)]} ${+iso.slice(8)}.${+iso.slice(5, 7)}.`; // "Mi 25.11."
+
+// A window belongs to the weekday it starts on and may run past midnight (end > 1440). On the next day it shows as a carried-over segment.
+// "Drinnen" entries work the same way, weekly or once on a date. The plan's weekday chips mean the coming 7 days, so a selected weekday is the next date (today included) on it.
+// An outside window whose start a one-off "Drinnen" entry covers does not happen on that date (cancelled).
+function dayPlan() {
+  const day = S.planDay, D = nextDate(S.planToday, day), P = addDays(D, -1), segs = [];
+  for (const s of S.plan || []) {
+    if (s.weekday === day) segs.push({ s, kind: 'out', start: s.start, end: Math.min(s.end, 1440), carried: false });
+    if (s.end > 1440 && (s.weekday + 1) % 7 === day) segs.push({ s, kind: 'out', start: 0, end: s.end - 1440, carried: true });
+  }
+  for (const s of S.inside || []) {
+    if (s.date ? s.date === D : s.weekday === day) segs.push({ s, kind: 'in', start: s.start, end: Math.min(s.end, 1440), carried: false });
+    if (s.end > 1440 && (s.date ? s.date === P : (s.weekday + 1) % 7 === day)) segs.push({ s, kind: 'in', start: 0, end: s.end - 1440, carried: true });
+  }
+  const inOf = (cat) => (S.inside || []).filter((x) => x.cat === cat);
+  for (const x of segs) if (x.kind === 'out') x.cancelled = !!insideAt(inOf(x.s.cat), x.carried ? P : D, x.s.start);
   segs.sort((a, b) => a.start - b.start);
   const by = { ilford: segs.filter((x) => x.s.cat === 'ilford'), bonnie: segs.filter((x) => x.s.cat === 'bonnie') };
+  const live = (cat) => by[cat].filter((x) => x.kind === 'out' && !x.cancelled);
   const ov = [];
-  for (const a of by.ilford) for (const b of by.bonnie) { const st = Math.max(a.start, b.start), e = Math.min(a.end, b.end); if (e > st) ov.push({ start: st, end: e }); }
-  return { by, ov };
+  for (const a of live('ilford')) for (const b of live('bonnie')) { const st = Math.max(a.start, b.start), e = Math.min(a.end, b.end); if (e > st) ov.push({ start: st, end: e }); }
+  return { by, ov, D };
 }
 const slotTime = (s) => `${minToText(s.start)}–${minToText(s.end % 1440)}`;
 
 function slotHint(sh) {
+  const inn = sh.kind === 'in', parts = [];
+  if (inn && !sh.id && sh.days.length) {
+    parts.push(sh.once ? `${sh.days.length === 1 ? 'Nur am' : 'Am'} ${sh.days.map((d) => dateLabel(nextDate(S.planToday, d))).join(', ')}` : `Jede Woche: ${sh.days.map((d) => WD[d]).join(', ')}.`);
+  }
+  if (inn && sh.allDay) return parts.join(' ');
   const a = textToMin(sh.start), b = textToMin(sh.end);
-  if (Number.isNaN(a) || Number.isNaN(b) || a === b) return 'Liegt „Bis“ vor „Von“, geht das Fenster in den nächsten Tag.';
-  if (b > a) return '';
-  const wd = sh.id ? sh.weekday : (sh.days.length === 1 ? sh.days[0] : null);
-  return `Endet ${wd === null ? 'am Folgetag' : WD[(wd + 1) % 7]} um ${sh.end} Uhr (nächster Tag).`;
+  if (Number.isNaN(a) || Number.isNaN(b) || a === b) parts.push('Liegt „Bis“ vor „Von“, geht das Fenster in den nächsten Tag.');
+  else if (b < a) {
+    const wd = sh.id ? sh.weekday : (sh.days.length === 1 ? sh.days[0] : null);
+    parts.push(`Endet ${wd === null ? 'am Folgetag' : WD[(wd + 1) % 7]} um ${sh.end} Uhr (nächster Tag).`);
+  }
+  return parts.join(' ');
 }
 
 function planView() {
@@ -357,33 +403,39 @@ function planView() {
   const days = WD.map((d, i) => `<button class="day ${i === today ? 'today' : ''}" data-act="planDay" data-i="${i}" aria-pressed="${i === S.planDay}" aria-label="${WD_LONG[i]}">${d}</button>`).join('');
   let body = '<p class="empty">Lade Zeitfenster …</p>';
   if (S.plan) {
-    const { by, ov } = dayPlan();
-    const bar = (cat, top) => by[cat].map((x) => `<div class="seg ${cat === 'ilford' ? 'il' : 'bo'}" style="top:${top}px;height:16px;border-radius:8px;${segStyle(x.start, x.end)}"></div>`).join('');
+    const { by, ov, D } = dayPlan();
+    // outside = filled bar, inside = hollow dashed bar (so the two differ in shape, not only in colour), a cancelled window is faded
+    const bar = (cat, top) => by[cat].map((x) => `<div class="seg ${cat === 'ilford' ? 'il' : 'bo'}${x.kind === 'in' ? ' inn' : x.cancelled ? ' canc' : ''}" style="top:${top}px;height:16px;border-radius:8px;${segStyle(x.start, x.end)}"></div>`).join('');
     const tops = { ilford: o === 'ilford' ? 6 : 46, bonnie: o === 'bonnie' ? 6 : 46 };
     const ovHtml = ov.map((x) => `<div class="ovband" style="top:-2px;bottom:-2px;${segStyle(x.start, x.end)}"></div>`).join('');
     const warn = ov.length
       ? `<div class="box alert" role="alert"><span style="padding-top:1px">${ic('alert')}</span><div><b>Überschneidung ${ov.map((x) => `${minToText(x.start)}–${minToText(x.end)}`).join(', ')}</b><span>Beide wären gleichzeitig draußen. ${CATS[o].gen} Fenster kürzen oder verschieben?</span></div></div>`
       : `<div class="box ok">${ic('check')} Keine Überschneidungen</div>`;
-    const row = (x, mine) => { const s = x.s, over = s.end > 1440;
-      const sub = x.carried ? `${ic('moon', 14)} Fortsetzung von ${WD[s.weekday]}`
-        : mine ? `${ic('bell', 14)} ${s.remind} Min vorher erinnern${over ? ` · bis ${WD[(s.weekday + 1) % 7]}` : ''}`
-        : `${ic('lock', 14)} Von ${esc(me().otherName)}${over ? ` · bis ${WD[(s.weekday + 1) % 7]}` : ''}`;
-      return `<div class="slot"><img src="${img(s.cat, 'head')}" alt="${CATS[s.cat].name}" width="40" height="40">
-      <div class="info"><b class="time">${x.carried ? `00:00–${minToText(s.end % 1440)}` : slotTime(s)}</b><span>${sub}</span></div>
-      ${mine ? `<button class="round-btn" data-act="editSlot" data-id="${s.id}" aria-label="Zeitfenster ${slotTime(s)} bearbeiten">${ic('pencil')}</button>` : ''}</div>`; };
+    const row = (x, mine) => { const s = x.s, over = s.end > 1440, inn = x.kind === 'in';
+      let sub;
+      if (inn) sub = `${ic('home', 14)} Bleibt drinnen · ${x.carried ? `Fortsetzung von ${s.date ? dateLabel(s.date) : WD[s.weekday]}` : s.date ? `nur am ${dateLabel(s.date)}` : 'jede Woche'}${over && !x.carried ? ` · bis ${WD[(s.weekday + 1) % 7]}` : ''}`;
+      else if (x.cancelled) sub = `${ic('home', 14)} Entfällt am ${dateLabel(D)} · ${CATS[s.cat].name} bleibt drinnen`;
+      else if (x.carried) sub = `${ic('moon', 14)} Fortsetzung von ${WD[s.weekday]}`;
+      else sub = mine ? `${ic('bell', 14)} ${s.remind} Min vorher erinnern${over ? ` · bis ${WD[(s.weekday + 1) % 7]}` : ''}` : `${ic('lock', 14)} Von ${esc(me().otherName)}${over ? ` · bis ${WD[(s.weekday + 1) % 7]}` : ''}`;
+      const whole = inn && s.start === 0 && s.end === 1440;
+      const time = x.carried ? `00:00–${minToText(s.end % 1440)}` : whole ? 'Ganztägig' : slotTime(s);
+      const lock = (inn || x.cancelled) && !mine ? `<span>${ic('lock', 14)} Von ${esc(me().otherName)}</span>` : '';
+      return `<div class="slot${inn ? ' inn' : ''}${x.cancelled ? ' cancel' : ''}"><img src="${img(s.cat, 'head')}" alt="${CATS[s.cat].name}" width="40" height="40">
+      <div class="info"><b class="time">${time}</b><span>${sub}</span>${lock}</div>
+      ${mine ? `<button class="round-btn" data-act="editSlot" data-id="${s.id}" aria-label="${inn ? 'Drinnen-Zeit' : 'Zeitfenster'} ${esc(time)} bearbeiten">${ic('pencil')}</button>` : ''}</div>`; };
     const list = by[o].map((s) => row(s, true)).join('') + by[t].map((s) => row(s, false)).join('');
     body = `<section class="card" aria-label="Tagesplan" style="padding:16px;border-radius:24px">
-        <div class="sec-head"><h2 style="font-size:22px">${WD_LONG[S.planDay]}</h2><span class="small">0 – 24 Uhr</span></div>
+        <div class="sec-head"><h2 style="font-size:22px">${WD_LONG[S.planDay]}</h2><span class="small">${+D.slice(8)}.${+D.slice(5, 7)}. · 0 – 24 Uhr</span></div>
         <div class="strip-wrap">
           <div class="strip-heads" style="width:28px;padding:3px 0 5px"><img src="${img(o, 'head')}" alt="${CATS[o].name}" width="28" height="28"><img src="${img(t, 'head')}" alt="${CATS[t].name}" width="28" height="28"></div>
           <div class="strip" style="height:70px">${ovHtml}<div class="track" style="top:6px;height:16px;border-radius:8px"></div><div class="track" style="top:46px;height:16px;border-radius:8px"></div>${bar('ilford', tops.ilford)}${bar('bonnie', tops.bonnie)}</div>
         </div>${hoursRow(28, [25, 50, 75])}${warn}</section>
       <section class="card slots" aria-label="Zeitfenster" style="border-radius:24px;gap:0">
-        ${list || '<p class="empty">Für diesen Tag gibt es noch keine Zeitfenster. Lege feste Zeiten an, dann erinnern wir dich kurz vorher.</p>'}
-        <button class="btn ghost" data-act="addSlot">${ic('plus')} Zeitfenster für ${CATS[o].name}</button></section>`;
+        ${list || '<p class="empty">Für diesen Tag gibt es noch nichts im Plan. Lege feste Draußen-Zeiten an, dann erinnern wir dich kurz vorher, oder plane, dass eine Katze drinnen bleibt.</p>'}
+        <button class="btn ghost" data-act="addSlot">${ic('plus')} Zeit für ${CATS[o].name} planen</button></section>`;
   }
   return `<div class="scroll"><div class="page" style="gap:14px">
-    <div class="head-text" style="min-height:56px;justify-content:center"><h1>Plan</h1><p class="sub">Wiederkehrende Freigang-Zeiten pro Katze</p></div>
+    <div class="head-text" style="min-height:56px;justify-content:center"><h1>Plan</h1><p class="sub">Freigang-Zeiten und Drinnen-Tage pro Katze</p></div>
     <div class="days">${days}</div>${body}</div></div>`;
 }
 
@@ -594,17 +646,24 @@ function sheetHtml() {
       <div class="grid2">${opts.map(([l, m]) => `<button class="opt" data-act="adjustPick" data-m="${m}">${l}</button>`).join('')}</div>
       <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
   } else if (sh.type === 'slot') {
-    title = sh.id ? 'Zeitfenster bearbeiten' : `Neues Zeitfenster für ${CATS[o].name}`;
-    const dayChips = sh.id ? `<span class="sub">${WD_LONG[sh.weekday]}</span>`
+    const inn = sh.kind === 'in', edit = !!sh.id, name = CATS[o].name;
+    title = edit ? (inn ? 'Drinnen-Zeit bearbeiten' : 'Zeitfenster bearbeiten') : inn ? `${name} bleibt drinnen` : `Neues Zeitfenster für ${name}`;
+    const kindCtl = edit ? '' : `<div class="seg-ctl" role="group" aria-label="Art"><button type="button" data-act="slotKind" data-k="out" aria-pressed="${!inn}">Draußen</button><button type="button" data-act="slotKind" data-k="in" aria-pressed="${inn}">Drinnen</button></div>`;
+    const dayChips = edit ? `<span class="sub">${WD_LONG[sh.weekday]}${inn ? (sh.date ? `, ${dateLabel(sh.date).replace(/^\S+\s/, '')}` : ' · jede Woche') : ''}</span>`
       : `<div class="chips" role="group" aria-label="Wochentage">${WD.map((d, i) => `<button type="button" data-act="slotDay" data-i="${i}" aria-pressed="${sh.days.includes(i)}" aria-label="${WD_LONG[i]}">${d}</button>`).join('')}</div>`;
-    inner = `<h2 id="sh-t">${esc(title)}</h2>${dayChips}
-      <div class="two"><div class="field"><label for="slot-start">Von</label><input class="input text" id="slot-start" type="time" step="300" value="${esc(sh.start)}"></div>
-      <div class="field"><label for="slot-end">Bis</label><input class="input text" id="slot-end" type="time" step="300" value="${esc(sh.end)}"></div></div>
+    const onceCtl = inn && !edit ? `<div class="seg-ctl" role="group" aria-label="Wie oft"><button type="button" data-act="slotOnce" data-v="1" aria-pressed="${sh.once}">Nur einmal</button><button type="button" data-act="slotOnce" data-v="0" aria-pressed="${!sh.once}">Jede Woche</button></div>` : '';
+    const allDayRow = inn ? `<div class="set-row"><div class="tx"><b>Ganztägig</b><span>${sh.allDay ? `${name} bleibt den ganzen Tag drinnen.` : 'Nur in dieser Zeit drinnen.'}</span></div>
+        <button type="button" class="sw" role="switch" aria-checked="${sh.allDay}" aria-label="Ganztägig" data-act="slotAllDay"><i></i></button></div>` : '';
+    const times = inn && sh.allDay ? '' : `<div class="two"><div class="field"><label for="slot-start">Von</label><input class="input text" id="slot-start" type="time" step="300" value="${esc(sh.start)}"></div>
+      <div class="field"><label for="slot-end">Bis</label><input class="input text" id="slot-end" type="time" step="300" value="${esc(sh.end)}"></div></div>`;
+    const note = inn ? `${esc(me().otherName)} sieht das und weiß, dass ${name} drinnen bleibt.${sh.once || sh.date ? ' Draußen-Zeiten, die in dieser Zeit beginnen, entfallen.' : ''}`
+      : `${esc(me().otherName)} sieht das Fenster, und du wirst 15 Min vorher erinnert.`;
+    inner = `<h2 id="sh-t">${esc(title)}</h2>${kindCtl}${dayChips}${onceCtl}${allDayRow}${times}
       <span class="small" id="slot-hint">${esc(slotHint(sh))}</span>
-      <span class="small">${esc(me().otherName)} sieht das Fenster, und du wirst 15 Min vorher erinnert.</span>
+      <span class="small">${note}</span>
       ${sh.error ? `<p class="err" role="alert">${esc(sh.error)}</p>` : ''}
       <button class="btn in sm" data-act="saveSlot" ${sh.busy ? 'disabled' : ''}>Speichern</button>
-      ${sh.id ? '<button class="btn plain" data-act="deleteSlot" style="color:var(--out-fg)">Zeitfenster löschen</button>' : ''}
+      ${edit ? `<button class="btn plain" data-act="deleteSlot" style="color:var(--out-fg)">${inn ? 'Drinnen-Zeit löschen' : 'Zeitfenster löschen'}</button>` : ''}
       <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
   } else if (sh.type === 'catnote') {
     title = 'Eigener Hinweis';
@@ -813,33 +872,41 @@ const A = {
   },
   planDay(d) { S.planDay = +d.i; render(); },
   addSlot() {
-    const sh = { type: 'slot', id: null, days: [S.planDay], start: '16:00', end: '17:00', error: '' };
-    openSheet(sh);
+    openSheet({ type: 'slot', id: null, kind: 'out', days: [S.planDay], start: '16:00', end: '17:00', allDay: true, once: true, error: '' });
   },
+  slotKind(d) { S.sheet.kind = d.k; S.sheet.error = ''; renderOverlay(); },
+  slotOnce(d) { S.sheet.once = d.v === '1'; renderOverlay(); },
+  slotAllDay() { S.sheet.allDay = !S.sheet.allDay; S.sheet.error = ''; renderOverlay(); },
   slotDay(d) {
     const i = +d.i, days = S.sheet.days;
     S.sheet.days = days.includes(i) ? days.filter((x) => x !== i) : [...days, i].sort();
     renderOverlay();
   },
   editSlot(d) {
-    const s = (S.plan || []).find((x) => x.id === +d.id);
-    if (s) openSheet({ type: 'slot', id: s.id, weekday: s.weekday, days: [s.weekday], start: minToText(s.start), end: minToText(s.end % 1440), error: '' });
+    const id = +d.id, ins = (S.inside || []).find((x) => x.id === id), s = ins || (S.plan || []).find((x) => x.id === id);
+    if (s) openSheet({ type: 'slot', id: s.id, kind: ins ? 'in' : 'out', weekday: s.weekday, date: s.date || null, days: [s.weekday], start: minToText(s.start), end: minToText(s.end % 1440), allDay: !!ins && s.start === 0 && s.end === 1440, once: !!s.date, error: '' });
   },
   async saveSlot() {
-    const sh = S.sheet, a = textToMin(sh.start), b = textToMin(sh.end);
-    if (Number.isNaN(a) || Number.isNaN(b) || a === b) { sh.error = 'Bitte „Von“ und „Bis“ wählen. Sie dürfen nicht gleich sein.'; renderOverlay(); return; }
+    const sh = S.sheet, inn = sh.kind === 'in', whole = inn && sh.allDay;
+    const a = whole ? 0 : textToMin(sh.start), b = whole ? 1440 : textToMin(sh.end);
+    if (!whole && (Number.isNaN(a) || Number.isNaN(b) || a === b)) { sh.error = 'Bitte „Von“ und „Bis“ wählen. Sie dürfen nicht gleich sein.'; renderOverlay(); return; }
     if (!sh.id && !sh.days.length) { sh.error = 'Bitte mindestens einen Wochentag wählen.'; renderOverlay(); return; }
     sh.busy = true; sh.error = ''; renderOverlay();
     try {
-      const r = sh.id ? await api('PUT', `/api/plan/${sh.id}`, { start: a, end: b }) : await api('POST', '/api/plan', { weekdays: sh.days, start: a, end: b });
-      if (r.ok) { await loadPlan(); S.sheet = null; render(); toast('Zeitfenster gespeichert.'); return; }
-      sh.error = r.status === 409 ? 'Das überschneidet sich mit einem anderen Zeitfenster von dir.' : 'Bitte Zeiten in 5-Minuten-Schritten wählen.';
+      const r = sh.id ? await api('PUT', `/api/plan/${sh.id}`, { start: a, end: b, allDay: whole })
+        : await api('POST', '/api/plan', { kind: sh.kind, weekdays: sh.days, start: a, end: b, allDay: whole, once: inn && sh.once });
+      if (r.ok) { await loadPlan(); S.sheet = null; render(); toast(inn ? 'Drinnen-Zeit gespeichert.' : 'Zeitfenster gespeichert.'); return; }
+      if (r.status === 409) {
+        const w = r.data?.with;
+        sh.error = inn ? (w === 'in' ? 'Dafür gibt es schon eine Drinnen-Zeit von dir.' : 'Das überschneidet sich mit einem Draußen-Zeitfenster von dir. Wähle „Nur einmal“ oder ändere das Zeitfenster.')
+          : w === 'in' ? 'Das überschneidet sich mit einer wöchentlichen Drinnen-Zeit von dir.' : 'Das überschneidet sich mit einem anderen Zeitfenster von dir.';
+      } else sh.error = 'Bitte Zeiten in 5-Minuten-Schritten wählen.';
     } catch { sh.error = 'Keine Verbindung. Bitte nochmal versuchen.'; }
     sh.busy = false; renderOverlay();
   },
   async deleteSlot() {
     const sh = S.sheet;
-    try { const r = await api('DELETE', `/api/plan/${sh.id}`); if (r.ok) { await loadPlan(); S.sheet = null; render(); toast('Zeitfenster gelöscht.'); return; } } catch { /* fall through */ }
+    try { const r = await api('DELETE', `/api/plan/${sh.id}`); if (r.ok) { await loadPlan(); S.sheet = null; render(); toast(sh.kind === 'in' ? 'Drinnen-Zeit gelöscht.' : 'Zeitfenster gelöscht.'); return; } } catch { /* fall through */ }
     sh.error = 'Das hat nicht geklappt.'; renderOverlay();
   },
   logDays(d) { S.logDays = +d.d; S.logAll = false; S.log = null; render(); loadLog().then(render); },

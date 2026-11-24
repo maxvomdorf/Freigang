@@ -1,6 +1,6 @@
 {
   "name": "freigang",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "private": true,
   "description": "Freigang: gemeinsamer Drinnen/Draußen-Status und Protokoll für zwei Nachbarskatzen (Ilford und Bonnie). Cloudflare Worker + D1 + Web Push.",
   "type": "module",

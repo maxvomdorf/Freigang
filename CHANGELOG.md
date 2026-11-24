@@ -1,5 +1,14 @@
 # Änderungsprotokoll
 
+## 1.7.0
+- Plan: Zeiten, in denen eine Katze **drinnen bleibt**. Im Plan wählt man beim Anlegen „Draußen“ oder „Drinnen“. Drinnen-Einträge gibt es **„Nur einmal“** (am nächsten Tag mit dem gewählten Wochentag, heute eingeschlossen, höchstens 6 Tage im Voraus) oder **„Jede Woche“**, **ganztägig** (Standard) oder mit Von/Bis, auch über Mitternacht.
+- Darstellung: Draußen-Zeiten bleiben gefüllte Balken, Drinnen-Zeiten sind hohle Balken mit gestrichelter Linie (Unterschied in der Form, nicht nur in der Farbe). In der Liste steht „Bleibt drinnen · nur am Mi 25.11.“ bzw. „jede Woche“.
+- Ein einmaliger Drinnen-Eintrag darf auf einem wöchentlichen Draußen-Fenster liegen, das ist die Ausnahme für einen Tag. Beginnt das Fenster in diesem Zeitraum, **entfällt** es an diesem Tag: Die Erinnerung „Gleich: … darf raus“ kommt nicht, im Plan steht das Fenster durchgestrichen als „Entfällt am …“, und es zählt nicht für den Hinweis bei Überschneidungen. Wöchentliche Einträge dürfen sich nicht überschneiden (Draußen und Drinnen derselben Katze), einmalige Drinnen-Einträge nicht untereinander.
+- Auf „Jetzt“ erscheint bei einer Katze, die laut Plan drinnen bleibt, ein Hinweis („Bleibt laut Plan heute drinnen“, „… bis 23:00 Uhr drinnen“), auch bei der anderen Katze. Er ist reine Information: Rauslassen bleibt jederzeit möglich, es gibt keine zusätzliche Rückfrage und keine Meldung beim Anlegen.
+- Einmalige Einträge räumt der Server nachts auf (nach zwei Tagen); wöchentliche bleiben.
+- Neue Spalten `schedule_slots.kind` und `schedule_slots.on_date` (Migration 0006, nur additiv; bestehende Fenster bleiben „Draußen“). Alte App-Versionen sehen Drinnen-Einträge nicht und legen weiter Draußen-Fenster an.
+- Neuer Test: Die Kalender-Funktionen der App (eine Kopie in `public/app.js`) werden gegen die des Servers geprüft.
+
 ## 1.6.1
 - Fütterung nachtragen: Im Tab „Füttern“ trägt „Früher gefüttert? Zeit anpassen“ eine vergessene Fütterung nach, per Schnellwahl (vor 10 Min bis 2 Std) oder mit genauer Uhrzeit, bis 24 Stunden zurück. Die Liste markiert solche Einträge mit „nachgetragen“, die Meldung an den Haushalt auch.
 - Der Hinweis „vor weniger als einer Stunde gefüttert“ gilt für den Zeitpunkt, der eingetragen wird: Er prüft die Fütterung, die am nächsten liegt, eine Stunde davor und danach.
