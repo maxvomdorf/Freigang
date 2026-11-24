@@ -1,8 +1,9 @@
 // HTTP API. Every route except none requires a personal access code (Authorization: Bearer <code>).
 import {
-  CATS, CAT_NAME, PEOPLE, otherCat, userOfCat, json, clamp, MIN, HOUR, zoned, localToUtc, hhmm, numVar,
+  CATS, CAT_NAME, PEOPLE, otherCat, peopleOfCat, OTHER_NAME, json, clamp, MIN, HOUR, zoned, localToUtc, hhmm, numVar, FEED_CAT, FEED_HINT_MIN, FEED_UNDO_MIN,
 } from './util.js';
-import { notifyUser } from './push.js';
+import { feedingRoutes, feedingOut, lastFeeding } from './feeding.js';
+import { notifyUser, notifyUsers } from './push.js';
 import { buildLog, todayStrip } from './stats.js';
 import { lastEvents, eventsSince } from './db.js';
 import { normalize, overlapsWeek } from './slots.js';
@@ -47,15 +48,23 @@ async function buildState(env, me, now) {
   const z = zoned(now, tz);
   const dayFrom = localToUtc(z.year, z.month, z.day, 0, 0, tz);
   const ev = await eventsSince(env, dayFrom);
-  const watch = await env.DB.prepare('SELECT 1 FROM watches WHERE user = ? AND cat = ?').bind(me.user, otherCat(me.cat)).first();
-  const partner = me.user === 'maxime' ? 'kathrin' : 'maxime';
-  const devices = await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user = ?').bind(partner).first();
+  const theirs = peopleOfCat(otherCat(me.cat));
+  const [watch, devices, prefs] = await env.DB.batch([
+    env.DB.prepare('SELECT 1 FROM watches WHERE user = ? AND cat = ?').bind(me.user, otherCat(me.cat)),
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions WHERE user IN (${theirs.map(() => '?').join(',')})`).bind(...theirs),
+    env.DB.prepare('SELECT own_push, feed_push FROM user_prefs WHERE user = ?').bind(me.user),
+  ]);
+  // Feeding tracker data exists only for Bonnie's household.
+  const feeds = me.cat === FEED_CAT;
+  const lastFeed = feeds ? await lastFeeding(env) : null;
   return {
     now,
     tz,
-    me: { user: me.user, name: me.name, cat: me.cat, admin: me.admin, other: otherCat(me.cat), otherName: me.user === 'maxime' ? 'Kathrin' : 'Maxime', partnerDevices: devices?.n ?? 0 },
+    me: { user: me.user, name: me.name, cat: me.cat, admin: me.admin, other: otherCat(me.cat), otherName: OTHER_NAME[me.cat], partnerDevices: devices.results[0]?.n ?? 0 },
+    prefs: { ownPush: (prefs.results[0]?.own_push ?? 1) === 1, ...(feeds ? { feedPush: (prefs.results[0]?.feed_push ?? 1) === 1 } : {}) },
+    ...(feeds ? { feeding: { last: lastFeed ? feedingOut(lastFeed, me, now) : null, hintMin: FEED_HINT_MIN, undoMin: FEED_UNDO_MIN } } : {}),
     cats: { ilford: catState(last.ilford), bonnie: catState(last.bonnie) },
-    waiting: !!watch,
+    waiting: watch.results.length > 0,
     today: todayStrip({ events: ev, now, tz }),
     quietHours: { start: numVar(env.QUIET_START, 22), end: numVar(env.QUIET_END, 6) },
     vapidPublicKey: env.VAPID_PUBLIC_KEY || '',
@@ -89,6 +98,22 @@ function baseStatusMessage({ cat, to, prev, otherStatus, otherSince, ts, soonMin
   }
   if (prev === 'soon') return { title: `${C} bleibt doch drin`, body: 'Die Vorwarnung ist abgebrochen.' };
   return { title: `${C} ist wieder drin`, body: `${O} kann raus.` };
+}
+
+/**
+ * Status push: always to everyone on the other side; also to the rest of your own household unless they switched that off.
+ * The own household gets the same text plus who did it. Same tag and topic for both, so a later push replaces the earlier one.
+ */
+async function pushStatus(env, me, msg, now, update) {
+  const opts = { urgency: 'high', topic: `status-${me.cat}` };
+  const base = { tag: `cat-${me.cat}`, ts: now, ...(update ? { update: true } : {}) };
+  const { results: off } = await env.DB.prepare('SELECT user FROM user_prefs WHERE own_push = 0').all();
+  const muted = new Set(off.map((r) => r.user));
+  const own = peopleOfCat(me.cat).filter((u) => u !== me.user && !muted.has(u));
+  await Promise.all([
+    notifyUsers(env, peopleOfCat(otherCat(me.cat)), { ...msg, ...base }, opts),
+    notifyUsers(env, own, { ...msg, body: `${msg.body} (von ${me.name})`, ...base }, opts),
+  ]);
 }
 
 async function setStatus(env, ctx, me, body) {
@@ -127,9 +152,7 @@ async function setStatus(env, ctx, me, body) {
   await env.DB.batch(stmts);
 
   const msg = statusMessage({ cat, to, prev: cur, otherStatus: oth, otherSince: last[other]?.ts, ts, soonMin, tz, note });
-  ctx.waitUntil(
-    notifyUser(env, userOfCat(other), { ...msg, tag: `cat-${cat}`, ts: now }, { urgency: 'high', topic: `status-${cat}` }),
-  );
+  ctx.waitUntil(pushStatus(env, me, msg, now, false));
   return json({ ok: true, state: await buildState(env, me, now) });
 }
 
@@ -151,7 +174,7 @@ async function noteOnStatus(env, ctx, me, body) {
       cat, to: row.status, prev: row.prev_status, otherStatus: last[other]?.status ?? 'in', otherSince: last[other]?.ts,
       ts: row.ts, soonMin, tz: tzOf(env), note,
     });
-    ctx.waitUntil(notifyUser(env, userOfCat(other), { ...msg, tag: `cat-${cat}`, ts: now, update: true }, { urgency: 'high', topic: `status-${cat}` }));
+    ctx.waitUntil(pushStatus(env, me, msg, now, true));
   }
   return json({ ok: true, state: await buildState(env, me, now) });
 }
@@ -281,7 +304,21 @@ export async function handleApi(request, env, ctx) {
     }
 
     if (path === '/api/plan' || path.startsWith('/api/plan/')) return planRoutes(request, env, me, path);
+    if (path === '/api/feedings' || path.startsWith('/api/feedings/')) return feedingRoutes(request, env, ctx, me, url, now, tzOf(env));
     if (path === '/api/push' || path === '/api/push/test') return pushRoutes(request, env, me, path);
+    if (path === '/api/prefs' && m === 'PUT') {
+      // Each setting is optional and touches only its own column; at least one must be present.
+      const b = await request.json().catch(() => ({}));
+      const has = (k) => b[k] !== undefined;
+      if (!has('ownPush') && !has('feedPush')) return json({ error: 'bad_prefs' }, 400);
+      if ((has('ownPush') && typeof b.ownPush !== 'boolean') || (has('feedPush') && typeof b.feedPush !== 'boolean')) return json({ error: 'bad_prefs' }, 400);
+      if (has('feedPush') && me.cat !== FEED_CAT) return json({ error: 'forbidden' }, 403);
+      const stmts = [];
+      if (has('ownPush')) stmts.push(env.DB.prepare('INSERT INTO user_prefs (user, own_push) VALUES (?1, ?2) ON CONFLICT(user) DO UPDATE SET own_push = ?2').bind(me.user, b.ownPush ? 1 : 0));
+      if (has('feedPush')) stmts.push(env.DB.prepare('INSERT INTO user_prefs (user, feed_push) VALUES (?1, ?2) ON CONFLICT(user) DO UPDATE SET feed_push = ?2').bind(me.user, b.feedPush ? 1 : 0));
+      await env.DB.batch(stmts);
+      return json({ ok: true, state: await buildState(env, me, now) });
+    }
 
     if (path === '/api/log' || path === '/api/export' || path === '/api/note') {
       if (!me.admin) return json({ error: 'forbidden' }, 403);

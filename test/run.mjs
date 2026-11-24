@@ -8,7 +8,7 @@ import { decrypt } from './push-crypto.mjs';
 
 const BASE = process.env.BASE || 'http://localhost:8787';
 const vars = Object.fromEntries(readFileSync('.dev.vars', 'utf8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
-const TOK = { maxime: vars.TOKEN_MAXIME, kathrin: vars.TOKEN_KATHRIN };
+const TOK = { maxime: vars.TOKEN_MAXIME, janin: vars.TOKEN_JANIN, kathrin: vars.TOKEN_KATHRIN, linus: vars.TOKEN_LINUS, oskar: vars.TOKEN_OSKAR, annalena: vars.TOKEN_ANNALENA };
 let failed = 0;
 const ok = (c, m) => { if (!c) { failed++; console.log('  FAIL', m); } else console.log('  ok  ', m); };
 const api = async (who, method, path, body) => {
@@ -234,6 +234,155 @@ try {
   const left = JSON.parse(sql("SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint LIKE '%/gone'"))[0].results[0].n;
   ok(left === 0, 'subscription answered with 410 is deleted');
   ok(drain().some((x) => x.user === 'kathrin' && /Testnachricht/.test(x.msg.title)), 'test push reaches Kathrin');
+  console.log('household: several people per cat');
+  sql('DELETE FROM events; DELETE FROM watches; DELETE FROM sent_keys; DELETE FROM schedule_slots; DELETE FROM push_subscriptions; DELETE FROM user_prefs;');
+  const crew = ['maxime', 'janin', 'kathrin', 'linus', 'oskar', 'annalena'];
+  for (const u of crew) {
+    device(u); const d = devices[u];
+    sql(`INSERT INTO push_subscriptions (user, endpoint, p256dh, auth, created_at) VALUES ('${u}', 'https://push.test/push/${u}', '${b64u(d.pub)}', '${b64u(d.auth)}', 1)`);
+  }
+  const ja = await api('janin', 'GET', '/api/state'), li = await api('linus', 'GET', '/api/state'), an = await api('annalena', 'GET', '/api/state');
+  ok(ja.body.me.name === 'Janin' && ja.body.me.cat === 'ilford' && ja.body.me.admin === true, 'Janin looks after Ilford and is an admin');
+  ok(ja.body.me.otherName === 'Kathrin' && li.body.me.otherName === 'Maxime' && an.body.me.otherName === 'Maxime', 'the other side is always shown as Kathrin / Maxime');
+  ok(li.body.me.cat === 'bonnie' && an.body.me.name === 'Anna-Lena' && an.body.me.cat === 'bonnie', 'Linus and Anna-Lena look after Bonnie');
+  ok(ja.body.me.partnerDevices === 4, 'Janin sees 4 devices on the other side: ' + ja.body.me.partnerDevices);
+  ok((await api('janin', 'GET', '/api/log?days=7')).status === 200 && (await api('janin', 'GET', '/api/export?days=7')).status === 200, 'Janin (admin) can open the log and export');
+  ok((await api('linus', 'GET', '/api/log?days=7')).status === 403, 'Linus cannot open the log');
+  ok((await api('oskar', 'GET', '/api/export?days=7')).status === 403, 'Oskar cannot export');
+  ok((await api('janin', 'POST', '/api/status', { to: 'soon', soonMin: 10 })).body.state.cats.ilford.status === 'soon', 'Janin announces Ilford');
+  await sleep(1500); p = drain();
+  const who = (list) => list.map((x) => x.user).sort().join(',');
+  ok(who(p) === 'annalena,kathrin,linus,maxime,oskar', 'push reaches all of Bonnie\'s side and Maxime, not Janin herself: ' + who(p));
+  ok(/\(von Janin\)/.test(p.find((x) => x.user === 'maxime')?.msg.body || '') && !/von Janin/.test(p.find((x) => x.user === 'linus')?.msg.body || ''), 'own household sees who did it, the other side gets the plain text');
+  ok(p.every((x) => x.msg?.title === 'Ilford kommt in 10 Min raus'), 'same title for everybody');
+  ok((await api('maxime', 'PUT', '/api/prefs', { ownPush: 'nein' })).status === 400, 'prefs must be a boolean');
+  const pr = await api('maxime', 'PUT', '/api/prefs', { ownPush: false });
+  ok(pr.status === 200 && pr.body.state.prefs.ownPush === false && (await api('janin', 'GET', '/api/state')).body.prefs.ownPush === true, 'Maxime turns household messages off, Janin keeps hers');
+  await api('janin', 'POST', '/api/status', { to: 'out' }); await sleep(1500); p = drain();
+  ok(who(p) === 'annalena,kathrin,linus,oskar', 'with the setting off, Maxime gets nothing from Janin: ' + who(p));
+  await api('maxime', 'PUT', '/api/prefs', { ownPush: true });
+  ok((await api('linus', 'POST', '/api/status', { to: 'out' })).status === 409, 'the conflict guard applies to Linus as well');
+  ok((await api('linus', 'POST', '/api/status', { to: 'out', force: true })).body.state.cats.bonnie.override === true, 'Linus can go anyway (override)');
+  await sleep(1500); p = drain();
+  ok(who(p) === 'annalena,janin,kathrin,maxime,oskar', 'Linus: Ilford\'s side plus the rest of his own household: ' + who(p));
+  ok(/\(von Linus\)/.test(p.find((x) => x.user === 'kathrin')?.msg.body || '') && !/von Linus/.test(p.find((x) => x.user === 'maxime')?.msg.body || ''), 'only his own household sees "(von Linus)"');
+  ok((await api('janin', 'POST', '/api/status', { to: 'in' })).body.state.cats.ilford.status === 'in', 'Janin brings Ilford in'); await sleep(1000); drain();
+  ok((await api('oskar', 'POST', '/api/status', { to: 'in' })).body.state.cats.bonnie.status === 'in', 'Oskar brings Bonnie in (everybody may switch their cat)'); await sleep(1000); drain();
+  // nudges go to the whole household
+  await api('janin', 'POST', '/api/status', { to: 'out' }); await sleep(800); drain();
+  sql('UPDATE events SET ts = ts - 18600000');
+  await fetch(BASE + '/__scheduled?cron=*+*+*+*+*'); await sleep(1500); p = drain();
+  ok(who(p.filter((x) => /Noch draußen/.test(x.msg?.title))) === 'janin,maxime', '"Noch draußen?" goes to everybody who looks after Ilford: ' + who(p));
+  ok((await api('janin', 'POST', '/api/plan', { weekdays: [3], start: 600, end: 660 })).status === 200 && (await api('maxime', 'GET', '/api/plan')).body.slots.some((x) => x.cat === 'ilford'), 'Janin can plan Ilford\'s windows');
+  sql('DELETE FROM schedule_slots;');
+
+  console.log('feeding tracker (Bonnie\'s household only)');
+  sql('DELETE FROM feedings; DELETE FROM user_prefs; DELETE FROM sent_keys;'); drain();
+  const feedUsers = (list) => who(list.filter((x) => x.msg?.tag === 'feed-bonnie'));
+  const fm = await api('maxime', 'GET', '/api/state'), fl = await api('linus', 'GET', '/api/state');
+  ok(fm.body.feeding === undefined && fm.body.prefs.feedPush === undefined, 'Ilford\'s side gets no feeding data in the state');
+  ok(fl.body.feeding?.last === null && fl.body.feeding.hintMin === 60 && fl.body.feeding.undoMin === 10 && fl.body.prefs.feedPush === true, 'Bonnie\'s side: nothing fed yet, hint 60 min, undo 10 min, feed push on by default');
+  for (const who2 of ['maxime', 'janin']) {
+    ok((await api(who2, 'GET', '/api/feedings')).status === 403 && (await api(who2, 'POST', '/api/feedings')).status === 403 && (await api(who2, 'DELETE', '/api/feedings/1')).status === 403, `${who2} gets 403 on every feeding route`);
+  }
+  ok((await api('maxime', 'PUT', '/api/prefs', { feedPush: false })).status === 403, 'Ilford\'s people cannot set the feeding push');
+  ok((await api('linus', 'PUT', '/api/prefs', {})).status === 400 && (await api('linus', 'PUT', '/api/prefs', { feedPush: 'nein' })).status === 400, 'prefs need at least one boolean');
+  ok((await api('linus', 'GET', '/api/feedings')).body.feedings.length === 0, 'list starts empty');
+
+  let f1 = await api('linus', 'POST', '/api/feedings');
+  ok(f1.status === 200 && f1.body.entry.mine === true && f1.body.entry.undoable === true && f1.body.entry.name === 'Linus', 'Linus feeds Bonnie');
+  await sleep(1500); p = drain();
+  ok(feedUsers(p) === 'annalena,kathrin,oskar', 'push goes to the rest of Bonnie\'s household, not to Linus, never to Ilford\'s people: ' + feedUsers(p));
+  const fp = p.find((x) => x.user === 'kathrin')?.msg;
+  ok(/Linus/.test(fp?.body || '') && /gefüttert/.test(fp?.title || '') && !fp.update, 'push says who and when: ' + JSON.stringify(fp?.body));
+  ok(p.find((x) => x.user === 'kathrin')?.topic === 'feed-bonnie', 'own topic, so it does not replace the status push');
+
+  const dup = await api('kathrin', 'POST', '/api/feedings');
+  ok(dup.status === 409 && dup.body.error === 'recent' && dup.body.last.name === 'Linus' && dup.body.last.mine === false, 'second feeding within the hour is held back with who/when');
+  ok((await api('kathrin', 'GET', '/api/feedings')).body.feedings.length === 1, '...and nothing was entered');
+  const f2 = await api('kathrin', 'POST', '/api/feedings', { force: true });
+  ok(f2.status === 200, 'with force it is entered anyway');
+  await sleep(1500); p = drain();
+  ok(feedUsers(p) === 'annalena,linus,oskar', 'push for Kathrin\'s feeding: ' + feedUsers(p));
+
+  const lst = (await api('oskar', 'GET', '/api/feedings')).body.feedings;
+  ok(lst.length === 2 && lst[0].name === 'Kathrin' && lst[1].name === 'Linus' && lst.every((e) => !e.mine && !e.undoable), 'list is newest first with names; nothing is "mine" or undoable for Oskar');
+  ok((await api('oskar', 'GET', '/api/state')).body.feeding.last.name === 'Kathrin', 'state carries the latest feeding');
+  ok((await api('oskar', 'GET', '/api/feedings/3')).status === 404 && (await api('oskar', 'POST', '/api/feedings/3')).status === 404, 'only the exact collection path answers GET and POST');
+
+  // push setting: one switch must not touch the other
+  ok((await api('oskar', 'PUT', '/api/prefs', { ownPush: false })).body.state.prefs.ownPush === false, 'Oskar turns household messages off');
+  const fo = await api('oskar', 'PUT', '/api/prefs', { feedPush: false });
+  ok(fo.status === 200 && fo.body.state.prefs.feedPush === false && fo.body.state.prefs.ownPush === false, 'turning off the feeding push leaves the other setting alone');
+  const fa = await api('annalena', 'PUT', '/api/prefs', { feedPush: true });
+  ok(fa.body.state.prefs.feedPush === true && fa.body.state.prefs.ownPush === true, 'a person without a settings row gets the defaults for the other switch');
+  await api('annalena', 'POST', '/api/feedings', { force: true });
+  await sleep(1500); p = drain();
+  ok(feedUsers(p) === 'kathrin,linus', 'Oskar (setting off) gets no feeding push: ' + feedUsers(p));
+
+  // undo
+  const mine = (await api('annalena', 'GET', '/api/feedings')).body.feedings[0];
+  ok(mine.mine === true && mine.undoable === true && mine.name === 'Anna-Lena', 'Anna-Lena sees her entry as undoable');
+  ok((await api('linus', 'DELETE', `/api/feedings/${mine.id}`)).status === 403, 'nobody can undo somebody else\'s entry');
+  ok((await api('linus', 'DELETE', '/api/feedings/99999')).status === 404, 'unknown entry: 404');
+  ok((await api('annalena', 'DELETE', `/api/feedings/${mine.id}`)).status === 200 && (await api('annalena', 'GET', '/api/feedings')).body.feedings.length === 2, 'Anna-Lena takes her entry back');
+  await sleep(1500); p = drain();
+  const un = p.find((x) => x.user === 'kathrin')?.msg;
+  ok(feedUsers(p) === 'kathrin,linus' && un?.update === true && /zurückgenommen/.test(un?.title || '') && /Anna-Lena/.test(un?.body || '') && /Zuletzt gefüttert/.test(un?.body || ''), 'the correction push replaces the first one and names the remaining last feeding: ' + JSON.stringify(un));
+  sql('DELETE FROM feedings;');
+  const old = Date.now() - 11 * 60000;
+  sql(`INSERT INTO feedings (ts, user) VALUES (${old}, 'linus')`);
+  const oid = JSON.parse(sql("SELECT id FROM feedings LIMIT 1"))[0].results[0].id;
+  const olist = (await api('linus', 'GET', '/api/feedings')).body.feedings;
+  ok(olist[0].mine === true && olist[0].undoable === false, 'after 10 minutes the entry is no longer undoable');
+  const late = await api('linus', 'DELETE', `/api/feedings/${oid}`);
+  ok(late.status === 409 && late.body.error === 'too_late' && (await api('linus', 'GET', '/api/feedings')).body.feedings.length === 1, 'too late to undo: kept');
+  await sleep(500); drain();
+
+  // the one-hour edge
+  sql('DELETE FROM feedings;');
+  sql(`INSERT INTO feedings (ts, user) VALUES (${Date.now() - 59 * 60000}, 'linus')`);
+  ok((await api('kathrin', 'POST', '/api/feedings')).status === 409, '59 minutes ago: still a hint');
+  sql('DELETE FROM feedings;');
+  sql(`INSERT INTO feedings (ts, user) VALUES (${Date.now() - 61 * 60000}, 'linus')`);
+  ok((await api('kathrin', 'POST', '/api/feedings')).status === 200, '61 minutes ago: no hint');
+  await sleep(1200); p = drain();
+  ok(!p.some((x) => ['maxime', 'janin'].includes(x.user)), 'Ilford\'s devices never received anything from the feeding tracker');
+  sql('DELETE FROM feedings; DELETE FROM user_prefs;');
+
+  console.log('feeding tracker: entering a feeding afterwards');
+  sql('DELETE FROM feedings; DELETE FROM user_prefs;'); drain();
+  const H = 3600000, nowMs = () => Date.now();
+  ok((await api('kathrin', 'POST', '/api/feedings', { at: 'bald' })).status === 400, 'a bad time is rejected');
+  const b1 = await api('kathrin', 'POST', '/api/feedings', { at: nowMs() - 2 * H });
+  ok(b1.status === 200 && b1.body.entry.late === true && Math.abs(b1.body.entry.ts - (nowMs() - 2 * H)) < 5000 && b1.body.entry.undoable === true, 'Kathrin enters a feeding from 2 hours ago: marked as late, still undoable (counted from when she entered it)');
+  await sleep(1500); p = drain();
+  ok(feedUsers(p) === 'annalena,linus,oskar' && /\(nachgetragen\)/.test(p.find((x) => x.user === 'linus')?.msg.body || ''), 'the push says it was entered afterwards: ' + JSON.stringify(p.find((x) => x.user === 'linus')?.msg.body));
+  const bl = (await api('linus', 'GET', '/api/feedings')).body.feedings;
+  ok(bl.length === 1 && bl[0].late === true && bl[0].name === 'Kathrin', 'the list marks it as entered afterwards');
+  const st = await api('linus', 'GET', '/api/state');
+  ok(st.body.feeding.last.late === true && Math.abs(st.body.feeding.last.ts - (nowMs() - 2 * H)) < 5000, 'the state\'s "last feeding" is the one with the latest feeding time');
+  const nearBack = await api('linus', 'POST', '/api/feedings', { at: nowMs() - 2 * H - 30 * 60000 });
+  ok(nearBack.status === 409 && nearBack.body.last.name === 'Kathrin', 'a time within the hour before an entry gets the hint');
+  const nearAfter = await api('linus', 'POST', '/api/feedings', { at: nowMs() - 2 * H + 20 * 60000 });
+  ok(nearAfter.status === 409, '...and within the hour after it');
+  ok((await api('linus', 'POST', '/api/feedings', { at: nowMs() - 2 * H - 70 * 60000 })).status === 200, '70 minutes away: no hint');
+  ok((await api('linus', 'POST', '/api/feedings')).status === 200, 'feeding now is fine when the nearest entry is 2 hours old');
+  await sleep(1200); drain();
+  const far = await api('oskar', 'POST', '/api/feedings', { at: nowMs() - 30 * H, force: true });
+  ok(far.status === 200 && nowMs() - far.body.entry.ts > 23.9 * H && nowMs() - far.body.entry.ts < 24.1 * H, 'older than a day is pulled back to 24 hours');
+  const fut = await api('oskar', 'POST', '/api/feedings', { at: nowMs() + 5 * H, force: true });
+  ok(fut.status === 200 && fut.body.entry.ts <= nowMs(), 'a time in the future is pulled back to now');
+  ok((await api('kathrin', 'DELETE', `/api/feedings/${b1.body.entry.id}`)).status === 200, 'Kathrin takes back the entry from 2 hours ago (the undo window counts from when she entered it)');
+  sql('DELETE FROM feedings;');
+  sql(`INSERT INTO feedings (ts, user, recorded_at) VALUES (${nowMs() - 3 * H}, 'linus', ${nowMs() - 11 * 60000})`);
+  const oid2 = JSON.parse(sql('SELECT id FROM feedings LIMIT 1'))[0].results[0].id;
+  ok((await api('linus', 'DELETE', `/api/feedings/${oid2}`)).status === 409, 'entered 11 minutes ago for 3 hours ago: too late to undo');
+  sql(`DELETE FROM feedings; INSERT INTO feedings (ts, user) VALUES (${nowMs() - 5 * 60000}, 'linus')`);
+  const leg = (await api('linus', 'GET', '/api/feedings')).body.feedings[0];
+  ok(leg.undoable === true && leg.late === false && leg.rec === leg.ts, 'an entry from before this update (no entry time) counts from its own time');
+  await sleep(500); drain();
+  sql('DELETE FROM feedings; DELETE FROM user_prefs;');
 } catch (e) {
   failed++; console.log('ERROR', e);
 }

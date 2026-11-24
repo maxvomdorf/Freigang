@@ -1,7 +1,7 @@
-// Runs every minute: plan reminders, "time is up" and "still outside?" nudges. Quiet hours silence only these.
+// Runs every minute: plan reminders, "Auf geht’s" and "still outside?" nudges, sent to everyone who looks after that cat. Quiet hours (if set) silence only these.
 // Status-change pushes (api.js) are never silenced: cats are often out at dusk, which is exactly when it matters.
-import { CATS, CAT_NAME, PEOPLE, userOfCat, zoned, durText, isQuiet, numVar, HOUR, MIN } from './util.js';
-import { notifyUser } from './push.js';
+import { CATS, CAT_NAME, peopleOfCat, zoned, durText, isQuiet, numVar, HOUR, MIN } from './util.js';
+import { notifyUsers } from './push.js';
 import { lastEvents } from './db.js';
 import { minutesUntilStart } from './slots.js';
 
@@ -30,7 +30,7 @@ export async function runCron(env, nowMs = Date.now()) {
       if ((last[s.cat]?.status ?? 'in') !== 'in') continue;
       if (!(await claim(env, `rem:${s.id}:${nowMin + until}`, nowMs))) continue;
       const t = `${String(Math.floor(s.start_min / 60)).padStart(2, '0')}:${String(s.start_min % 60).padStart(2, '0')}`;
-      await notifyUser(env, userOfCat(s.cat), {
+      await notifyUsers(env, peopleOfCat(s.cat), {
         title: `Gleich: ${CAT_NAME[s.cat]} darf raus`, body: `Freigang-Zeit um ${t} Uhr.`, tag: `plan-${s.cat}`,
       }, { urgency: 'normal' });
       sent.push(`rem:${s.id}`);
@@ -41,7 +41,7 @@ export async function runCron(env, nowMs = Date.now()) {
       if (!row) continue;
       // 2. Countdown ran out and nothing happened.
       if (row.status === 'soon' && row.soon_until && row.soon_until <= nowMs && (await claim(env, `soon:${row.id}`, nowMs))) {
-        await notifyUser(env, userOfCat(cat), {
+        await notifyUsers(env, peopleOfCat(cat), {
           title: `${CAT_NAME[cat]}: Auf geht’s`, body: 'Jetzt rauslassen oder abbrechen?', tag: `nudge-${cat}`,
         }, { urgency: 'normal' });
         sent.push(`soon:${row.id}`);
@@ -50,7 +50,7 @@ export async function runCron(env, nowMs = Date.now()) {
       if (row.status === 'out' && nowMs - row.ts >= staleMs) {
         const n = Math.floor((nowMs - row.ts) / staleMs);
         if (await claim(env, `stale:${row.id}:${n}`, nowMs)) {
-          await notifyUser(env, userOfCat(cat), {
+          await notifyUsers(env, peopleOfCat(cat), {
             title: 'Noch draußen?', body: `${CAT_NAME[cat]} ist seit ${durText(nowMs - row.ts)} draußen.`, tag: `nudge-${cat}`,
           }, { urgency: 'normal' });
           sent.push(`stale:${row.id}:${n}`);

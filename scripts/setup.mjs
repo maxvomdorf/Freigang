@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { generateVapid, generateCode, wrangler, ROOT, readSecrets, writeSecrets, printLinks, jsonFrom, findDatabase, resolveEmail, applyAndDeploy, askLine } from './lib.mjs';
+import { generateVapid, generateCode, wrangler, ROOT, readSecrets, writeSecrets, printLinks, jsonFrom, findDatabase, resolveEmail, applyAndDeploy, askLine, addMissingCodes, codeSecrets, rememberAccount, PEOPLE_INFO } from './lib.mjs';
 
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(`--${n}`);
@@ -28,11 +28,16 @@ async function ask(question) {
 if (flag('local')) {
   step('1/2', 'Local test credentials (.dev.vars)');
   const p = join(ROOT, '.dev.vars');
-  if (existsSync(p)) say('  .dev.vars exists, leaving it alone.');
-  else {
+  if (existsSync(p)) {
+    // keep the file, but add test codes for people who were added later
+    const have = readFileSync(p, 'utf8');
+    const add = Object.values(PEOPLE_INFO).filter((x) => !have.includes(x.secretName + '=')).map((x) => `${x.secretName}=${generateCode()}`);
+    if (add.length) { writeFileSync(p, have.replace(/\n*$/, '\n') + add.join('\n') + '\n', { mode: 0o600 }); say(`  .dev.vars exists; added codes for ${add.length} new people.`); }
+    else say('  .dev.vars exists, leaving it alone.');
+  } else {
     const v = generateVapid();
     writeFileSync(p, [
-      `TOKEN_MAXIME=${generateCode()}`, `TOKEN_KATHRIN=${generateCode()}`,
+      ...Object.values(PEOPLE_INFO).map((x) => `${x.secretName}=${generateCode()}`),
       `VAPID_PUBLIC_KEY=${v.publicKey}`, `VAPID_PRIVATE_JWK=${JSON.stringify(v.privateJWK)}`,
       'VAPID_SUBJECT=mailto:test@freigang.test', 'PUSH_TEST_URL=http://127.0.0.1:9911', '',
     ].join('\n'), { mode: 0o600 });
@@ -65,10 +70,13 @@ let secrets = readSecrets();
 if (secrets) say('  Reusing the codes from the earlier run (.secrets.json).');
 else {
   const v = generateVapid();
-  secrets = { url: '', email, vapid: v, codes: { maxime: generateCode(), kathrin: generateCode() }, createdAt: new Date().toISOString() };
+  secrets = { url: '', email, vapid: v, codes: {}, createdAt: new Date().toISOString() };
+  addMissingCodes(secrets);
   writeSecrets(secrets);
   say('  Generated new codes and push keys, saved to .secrets.json (keep this file private).');
 }
+if (addMissingCodes(secrets).length) writeSecrets(secrets); // people added in a later version
+rememberAccount();
 
 step('4/7', 'Database (Cloudflare D1)');
 let db;
@@ -92,7 +100,7 @@ writeSecrets(secrets);
 step('6/7', 'Secrets (codes and push key)');
 const tmp = join(mkdtempSync(join(tmpdir(), 'freigang-')), 'secrets.json');
 writeFileSync(tmp, JSON.stringify({
-  TOKEN_MAXIME: secrets.codes.maxime, TOKEN_KATHRIN: secrets.codes.kathrin,
+  ...codeSecrets(secrets),
   VAPID_PUBLIC_KEY: secrets.vapid.publicKey, VAPID_PRIVATE_JWK: JSON.stringify(secrets.vapid.privateJWK),
 }), { mode: 0o600 });
 const sec = wrangler(['secret', 'bulk', tmp]);

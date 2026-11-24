@@ -26,8 +26,13 @@ export async function sendPush(env, sub, payload, opts = {}) {
 }
 
 /** Sends to every device of one person. Never throws. Returns how many devices accepted it. */
-export async function notifyUser(env, user, payload, opts = {}) {
-  const { results } = await env.DB.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user = ?').bind(user).all();
+export const notifyUser = (env, user, payload, opts = {}) => notifyUsers(env, [user], payload, opts);
+
+/** Sends to every device of several people. Never throws. Returns how many devices accepted it. */
+export async function notifyUsers(env, users, payload, opts = {}) {
+  if (!users.length) return 0;
+  const marks = users.map(() => '?').join(',');
+  const { results } = await env.DB.prepare(`SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user IN (${marks})`).bind(...users).all();
   let sent = 0;
   await Promise.all(
     results.map(async (sub) => {

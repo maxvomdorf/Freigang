@@ -4,12 +4,26 @@ export const CATS = ['ilford', 'bonnie'];
 export const CAT_NAME = { ilford: 'Ilford', bonnie: 'Bonnie' };
 export const otherCat = (c) => (c === 'ilford' ? 'bonnie' : 'ilford');
 
-// Exactly two people. Maxime owns Ilford and is the admin; Kathrin owns Bonnie.
+// The household roster. Two cats, several people per cat. Everyone switches only their own cat and sees both.
+// Maxime and Janin (Ilford) are admins: they see the log and add notes. Every person has a Worker secret `secret` holding their personal code.
+// scripts/ import this list too, so a new person only has to be added here.
 export const PEOPLE = {
   maxime: { user: 'maxime', name: 'Maxime', cat: 'ilford', admin: true, secret: 'TOKEN_MAXIME' },
+  janin: { user: 'janin', name: 'Janin', cat: 'ilford', admin: true, secret: 'TOKEN_JANIN' },
   kathrin: { user: 'kathrin', name: 'Kathrin', cat: 'bonnie', admin: false, secret: 'TOKEN_KATHRIN' },
+  linus: { user: 'linus', name: 'Linus', cat: 'bonnie', admin: false, secret: 'TOKEN_LINUS' },
+  oskar: { user: 'oskar', name: 'Oskar', cat: 'bonnie', admin: false, secret: 'TOKEN_OSKAR' },
+  annalena: { user: 'annalena', name: 'Anna-Lena', cat: 'bonnie', admin: false, secret: 'TOKEN_ANNALENA' },
 };
-export const userOfCat = (cat) => (cat === 'ilford' ? 'maxime' : 'kathrin');
+/** User keys of everyone who looks after a cat. */
+export const peopleOfCat = (cat) => Object.values(PEOPLE).filter((p) => p.cat === cat).map((p) => p.user);
+/** The name shown for "the other side", whoever is looking: Ilford's side always sees Kathrin, Bonnie's side Maxime. */
+export const OTHER_NAME = { ilford: 'Kathrin', bonnie: 'Maxime' };
+
+// Feeding tracker: only Bonnie's household uses it. Ilford's people never see it and never get its pushes.
+export const FEED_CAT = 'bonnie';
+export const FEED_HINT_MIN = 60; // fed less than this long ago: ask before entering another feeding
+export const FEED_UNDO_MIN = 10; // you can take back your own entry for this long
 
 export function json(data, status = 200) {
   return new Response(JSON.stringify(data), {

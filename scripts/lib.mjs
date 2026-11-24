@@ -1,4 +1,5 @@
 import { generateKeyPairSync, randomInt } from 'node:crypto';
+import { PEOPLE, CAT_NAME } from '../src/util.js';
 
 /** VAPID key pair for Web Push. publicKey goes to the browser, privateJWK stays a Worker secret. */
 export function generateVapid() {
@@ -35,7 +36,7 @@ export function wrangler(args, { capture = false, env = {} } = {}) {
   const [cmd, cmdArgs] = bin ? [bin, args] : ['npx', ['--no-install', 'wrangler', ...args]];
   const r = spawnSync(cmd, cmdArgs, {
     cwd: ROOT,
-    env: { ...process.env, ...env },
+    env: { ...accountEnv(), ...process.env, ...env },
     stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
     shell: process.platform === 'win32',
@@ -51,13 +52,35 @@ export function writeSecrets(s) {
   try { chmodSync(SECRETS_FILE, 0o600); } catch { /* not supported on this OS */ }
 }
 
-export const PEOPLE_INFO = {
-  maxime: { label: 'Maxime (Ilford, Admin)', secretName: 'TOKEN_MAXIME' },
-  kathrin: { label: 'Kathrin (Bonnie)', secretName: 'TOKEN_KATHRIN' },
-};
+// The roster lives in src/util.js (one list for the Worker and these scripts).
+export const PEOPLE_INFO = Object.fromEntries(Object.entries(PEOPLE).map(([key, p]) => [
+  key, { label: `${p.name} (${CAT_NAME[p.cat]}${p.admin ? ', Admin' : ''})`, secretName: p.secret },
+]));
+
+/** Makes sure every person in the roster has a code. Returns the keys that were missing (new people); existing codes stay untouched. */
+export function addMissingCodes(s) {
+  s.codes = s.codes || {};
+  const added = [];
+  for (const key of Object.keys(PEOPLE_INFO)) if (!s.codes[key]) { s.codes[key] = generateCode(); added.push(key); }
+  return added;
+}
+
+/** { TOKEN_NAME: code } for the given people, ready for `wrangler secret bulk`. */
+export const codeSecrets = (s, keys = Object.keys(PEOPLE_INFO)) => Object.fromEntries(keys.map((k) => [PEOPLE_INFO[k].secretName, s.codes[k]]));
 
 export function personalLinks(s) {
-  return Object.entries(PEOPLE_INFO).map(([key, p]) => ({ key, label: p.label, code: s.codes[key], link: `${s.url}/#k=${s.codes[key]}` }));
+  return Object.entries(PEOPLE_INFO).filter(([key]) => s.codes?.[key]).map(([key, p]) => ({ key, label: p.label, code: s.codes[key], link: `${s.url}/#k=${s.codes[key]}` }));
+}
+
+// Wrangler sometimes cannot find the account id on its own ("Failed to automatically retrieve account IDs").
+// If you ever set CLOUDFLARE_ACCOUNT_ID, it is remembered in .secrets.json and passed on from then on.
+function accountEnv() {
+  try { const id = readSecrets()?.accountId; return id ? { CLOUDFLARE_ACCOUNT_ID: id } : {}; } catch { return {}; }
+}
+export function rememberAccount() {
+  const id = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const s = id && readSecrets();
+  if (s && s.accountId !== id) { s.accountId = id; writeSecrets(s); }
 }
 
 export function printLinks(s) {

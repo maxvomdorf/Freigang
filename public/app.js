@@ -1,6 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.4.0'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.6.1'; // same as src/version.js; a newer server version makes the app reload itself once
 const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -21,6 +21,8 @@ const ICONS = {
   home: '<path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/>',
   calendar: '<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/>',
   chart: '<path d="M5 20V10M12 20V4M19 20v-7"/>',
+  bowl: '<path d="M3.5 11.5h17a8.5 7.5 0 0 1-17 0z"/><path d="M8 7.5c0-1.2 1-1.6 1-2.8M12 7.5c0-1.2 1-1.6 1-2.8M16 7.5c0-1.2 1-1.6 1-2.8"/>',
+  undo: '<path d="M9 6L4.5 10.5 9 15"/><path d="M5 10.5h8.5a5.5 5.5 0 0 1 0 11H11"/>',
   pencil: '<path d="M5 19l1-4L16 5l3 3L9 18z"/>',
   download: '<path d="M12 4v11M7.5 11l4.5 4.5 4.5-4.5M5 20h14"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -43,7 +45,7 @@ const store = {
 // ---------- state ----------
 const S = {
   code: '', state: null, skew: 0, tz: 'Europe/Berlin', online: true, view: 'loading',
-  plan: null, planDay: 0, log: null, logDays: 7,
+  plan: null, planDay: 0, log: null, logDays: 7, logAll: false, feed: null,
   noteDraft: '', sheet: null, toast: '', busy: false, loginError: '', loginBusy: false,
   push: { supported: false, perm: 'default', subscribed: false }, installEvent: null, confirmLogout: false,
 };
@@ -51,6 +53,7 @@ const now = () => Date.now() + S.skew;
 const me = () => S.state.me;
 const ownCat = () => me().cat;
 const otherCat = () => me().other;
+const feeds = () => !!S.state?.feeding; // the feeding tracker exists for Bonnie's household only
 
 // ---------- time helpers (always in the cats' time zone, not the phone's) ----------
 let dtf = null;
@@ -124,10 +127,12 @@ async function refresh() {
     if (r.ok) { applyState(r.data); S.online = true; reloadIfOutdated(r.data.version); } else S.online = false;
     if (S.online && S.view === 'plan') await loadPlan();
     if (S.online && S.view === 'log' && me().admin) await loadLog();
+    if (S.online && S.view === 'feed' && feeds()) await loadFeed();
   } catch { S.online = false; }
   render();
 }
 async function loadPlan() { const r = await api('GET', '/api/plan'); if (r.ok) S.plan = r.data.slots; }
+async function loadFeed() { const r = await api('GET', '/api/feedings?days=7'); if (r.ok) S.feed = r.data.feedings; }
 async function loadLog() { const r = await api('GET', `/api/log?days=${S.logDays}`); if (r.ok) S.log = r.data; }
 
 // ---------- push ----------
@@ -394,7 +399,9 @@ function logView() {
   let body = '<p class="empty" style="text-align:center">Lade Protokoll …</p>';
   if (L) {
     const il = (cat, row, top) => row[cat === 'ilford' ? 'il' : 'bo'].map((s) => `<div class="seg ${cat === 'ilford' ? 'il' : 'bo'}" style="top:${top}px;height:12px;border-radius:6px;left:${s.l}%;width:${s.w}%"></div>`).join('');
-    const rows = L.rows.map((r) => `<div class="dayrow"><div class="lbl"><b>${esc(r.d)}</b><span>${esc(r.date)}</span></div>
+    // In the 30-day view only the newest days show until "Alle anzeigen" is pressed, so the heatmap below stays within reach.
+    const FOLD = 10, folded = L.rows.length > FOLD && !S.logAll;
+    const rows = (folded ? L.rows.slice(0, FOLD) : L.rows).map((r) => `<div class="dayrow"><div class="lbl"><b>${esc(r.d)}</b><span>${esc(r.date)}</span></div>
       <div class="strip" style="height:34px">${r.ov.map((o) => `<div class="ovband" style="top:-3px;bottom:-3px;left:${o.l}%;width:${o.w}%"></div>`).join('')}
         <div class="track" style="top:2px;height:12px;border-radius:6px"></div><div class="track" style="top:20px;height:12px;border-radius:6px"></div>${il('ilford', r, 2)}${il('bonnie', r, 20)}</div></div>`).join('');
     const heat = (label, cells, bg) => `<div class="heatrow"><span>${label}</span><div>${cells.map((c) => `<i style="background:${bg};opacity:${c.o}"></i>`).join('')}</div></div>`;
@@ -408,7 +415,7 @@ function logView() {
         <div class="kpi"><b>${L.kpi.overrides}</b><span>mit Override</span></div></div>
       <section class="card" aria-label="Tagesband" style="gap:8px;padding:16px;border-radius:24px"><h2 style="font-size:20px">Tagesband</h2>
         <div class="legend"><span><i style="width:18px;height:8px;border-radius:4px;background:var(--ink)"></i>Ilford</span><span><i style="width:18px;height:8px;border-radius:4px;background:var(--bonnie)"></i>Bonnie</span><span><i style="width:10px;height:14px;border-left:2px solid var(--ov);border-right:2px solid var(--ov);background:rgba(168,50,31,.16)"></i>gemeinsam draußen</span></div>
-        <div style="margin-top:4px">${hoursRow(46)}</div>${rows}</section>
+        <div style="margin-top:4px">${hoursRow(46)}</div>${rows}${L.rows.length > FOLD ? `<button class="btn ghost more" data-act="logAll" aria-expanded="${!folded}">${folded ? `Alle ${L.rows.length} Tage anzeigen` : `Nur die letzten ${FOLD} Tage anzeigen`}</button>` : ''}</section>
       <section class="card" aria-label="Uhrzeiten" style="gap:10px;padding:16px;border-radius:24px">
         <div style="display:flex;flex-direction:column;gap:2px"><h2 style="font-size:20px">Wann sind sie draußen?</h2><span class="small">Je dunkler, desto öfter in diesen ${L.days} Tagen</span></div>
         ${heat('Ilford', L.heat.ilford, 'var(--ink)')}${heat('Bonnie', L.heat.bonnie, '#B9822F')}${heat('Gemeinsam', L.heat.ov, 'var(--ov)')}
@@ -423,8 +430,84 @@ function logView() {
     <div class="head"><div class="head-text"><h1>Protokoll</h1><p class="sub">Letzte ${S.logDays} Tage · nur für Admin</p></div><span class="pill">Admin</span></div>${body}</div></div>`;
 }
 
+// ----- feeding (Bonnie's household) -----
+const agoText = (ts) => (Math.round((now() - ts) / 60000) <= 0 ? 'gerade eben' : `vor ${dur(now() - ts)}`);
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+// "um 19:17 Uhr", "gestern um 16:42 Uhr" or "Mo 23.11. um 09:05 Uhr"
+const feedWhen = (ts) => {
+  const p = tp(ts), k = dayKey(ts), at = `um ${p.h}:${p.mi} Uhr`;
+  if (k === dayKey(now())) return at;
+  if (k === dayKey(now() - 86400000)) return `gestern ${at}`;
+  return `${WD[p.wd]} ${p.d}.${p.mo}. ${at}`;
+};
+const feedDayLabel = (ts) => {
+  const p = tp(ts), k = dayKey(ts);
+  if (k === dayKey(now())) return ['Heute', `${p.d}.${p.mo}.`];
+  if (k === dayKey(now() - 86400000)) return ['Gestern', `${p.d}.${p.mo}.`];
+  return [WD[p.wd], `${p.d}.${p.mo}.`];
+};
+// "HH:MM" → the moment it last was on the clock: today, or yesterday when it is later than now. NaN for a bad value.
+function lastClockTime(t) {
+  const m = textToMin(t);
+  if (Number.isNaN(m)) return { at: NaN };
+  const p = tp(now()), nowMin = +p.h * 60 + +p.mi, back = m <= nowMin ? nowMin - m : nowMin + 1440 - m;
+  return { at: now() - +p.s * 1000 - back * 60000, yesterday: m > nowMin };
+}
+const feedTimeHint = (t) => { const r = lastClockTime(t); return Number.isNaN(r.at) ? '' : `${r.yesterday ? 'Gestern' : 'Heute'} um ${minToText(textToMin(t))} Uhr`; };
+
+// Your own entry that is still young enough to take back (the server decides again).
+function undoableFeed() {
+  const F = S.state.feeding;
+  return [F.last, ...(S.feed || [])].find((e) => e && e.mine && now() - e.rec <= F.undoMin * 60000) || null;
+}
+
+function feedCard() {
+  const F = S.state.feeding, last = F.last, dis = S.busy || !S.online ? 'disabled' : '';
+  // The person who just entered it already has the undo line, so the hint is for everybody else (and for their own older entries).
+  const recent = last && now() - last.ts < F.hintMin * 60000 && !(last.mine && now() - last.rec <= F.undoMin * 60000);
+  const who = (e) => (e.mine ? 'dir' : e.name);
+  const meta = last ? `Zuletzt ${feedWhen(last.ts)} von ${who(last)}` : 'Noch keine Fütterung eingetragen';
+  const undo = undoableFeed();
+  const hint = recent ? `<div class="box warn" role="status"><span style="padding-top:1px">${ic('clock')}</span><div><b>${esc(cap(agoText(last.ts)))} schon gefüttert</b><span>Vielleicht ist Bonnie noch satt.</span></div></div>` : '';
+  return `<section class="card card-main" aria-label="Bonnie füttern">
+    <div class="row">
+      <div class="portrait big"><img src="${portrait('bonnie', S.state.cats.bonnie.status)}" alt=""></div>
+      <div class="stack"><span class="eyebrow">Fütterung</span><h2 class="name-l">Bonnie</h2><span class="meta">${esc(meta)}</span></div>
+    </div>${hint}
+    <div class="actions"><button class="btn in" data-act="feed" ${dis}>${ic('bowl', 22)} Bonnie füttern</button>
+      <button class="btn ghost" data-act="feedAdjust" ${dis}>${ic('clock')} Früher gefüttert? Zeit anpassen</button>
+      ${undo ? `<div class="line ok">${ic('check', 18)}<span>${undo.late ? `Nachgetragen für ${esc(hhmm(undo.ts))} Uhr.` : `Eingetragen um ${esc(hhmm(undo.ts))} Uhr.`}</span><button data-act="unfeed" data-id="${undo.id}" ${dis}>${ic('undo', 14)} Rückgängig</button></div>` : ''}
+      ${S.online ? '' : `<div class="line warn">${ic('alert', 18)}<span>Ohne Verbindung geht das gerade nicht.</span></div>`}</div></section>`;
+}
+
+function feedList() {
+  let body = '<p class="empty">Lade Verlauf …</p>';
+  if (S.feed) {
+    const groups = [];
+    for (const e of S.feed) {
+      const k = dayKey(e.ts);
+      if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, ts: e.ts, items: [] });
+      groups[groups.length - 1].items.push(e);
+    }
+    body = groups.length ? groups.map((g) => { const [d, date] = feedDayLabel(g.ts);
+      return `<div class="fgroup"><div class="fhead"><b>${esc(d)}</b><span>${esc(date)}</span><em>${g.items.length} ×</em></div>${g.items.map((e) => `<div class="frow"><time>${esc(hhmm(e.ts))}</time><span class="who">${esc(e.name)}</span>${e.mine ? '<span class="tag you">du</span>' : ''}${e.late ? '<span class="tag late">nachgetragen</span>' : ''}</div>`).join('')}</div>`; }).join('')
+      : '<p class="empty">In den letzten 7 Tagen wurde nichts eingetragen.</p>';
+  }
+  return `<section class="card" aria-label="Verlauf" style="padding:16px 16px 10px;gap:4px;border-radius:24px">
+    <div class="sec-head" style="padding-bottom:6px"><h2 style="font-size:20px">Wer hat gefüttert?</h2><span class="small">letzte 7 Tage</span></div>${body}
+    <p class="small" style="padding:10px 0 4px">Alle in Bonnies Haushalt sehen diese Liste. Falsch gedrückt? Rückgängig geht ${S.state.feeding.undoMin} Minuten lang.</p></section>`;
+}
+
+function feedView() {
+  return `<div class="scroll"><div class="page" style="gap:14px">
+    <div class="head"><div class="head-text"><h1>Füttern</h1><p class="sub">${esc(headerDate())}</p></div>
+      <button class="icon-btn" data-act="settings" aria-label="Einstellungen">${ic('sliders', 22)}</button></div>
+    ${feedCard()}${feedList()}</div></div>`;
+}
+
 function tabs() {
   const items = [['home', 'home', 'Jetzt'], ['plan', 'calendar', 'Plan']];
+  if (feeds()) items.push(['feed', 'bowl', 'Füttern']);
   if (me().admin) items.push(['log', 'chart', 'Protokoll']);
   return `<nav class="tabs" aria-label="Hauptnavigation">${items.map(([v, i, l]) => `<button class="tab" data-act="tab" data-v="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${ic(i, 22)} ${l}</button>`).join('')}</nav>`;
 }
@@ -489,6 +572,21 @@ function sheetHtml() {
       <button class="btn in sm" data-act="wait">${ic('bell')} Warten – Bescheid, wenn ${CATS[t].name} drin ist</button>
       <button class="btn danger sm" data-act="force"><span>Trotzdem rauslassen</span><small>wird im Protokoll vermerkt</small></button>
       <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
+  } else if (sh.type === 'feedrecent') {
+    const l = sh.last, who = l.mine ? 'dir' : l.name;
+    inner = `<div class="head2"><div class="tile"><img src="${img('bonnie', 'sitting')}" alt=""></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">Bonnie wurde schon gefüttert</h2><span class="sub" style="line-height:1.4">${esc(cap(agoText(l.ts)))} (${esc(feedWhen(l.ts))}) von ${esc(who)}. Trotzdem noch einmal eintragen?</span></div></div>
+      <button class="btn in sm" data-act="feedForce" ${S.busy ? 'disabled' : ''}>${ic('bowl')} Trotzdem eintragen</button>
+      <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
+  } else if (sh.type === 'feedwhen') {
+    const opts = [['Vor 10 Min', 10], ['Vor 30 Min', 30], ['Vor 1 Std', 60], ['Vor 2 Std', 120]];
+    inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">Wann wurde Bonnie gefüttert?</h2><span class="sub">Zum Nachtragen, wenn es vorhin vergessen wurde.</span></div>
+      <div class="grid2">${opts.map(([l, m]) => `<button class="opt" data-act="feedPick" data-m="${m}" ${S.busy ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+      <div class="field"><label for="feed-time">Oder genaue Uhrzeit</label><input class="input text" id="feed-time" type="time" step="300" value="${esc(sh.time)}"></div>
+      <span class="small" id="feed-time-hint">${esc(feedTimeHint(sh.time))}</span>
+      ${sh.error ? `<p class="err" role="alert">${esc(sh.error)}</p>` : ''}
+      <button class="btn in sm" data-act="feedAtTime" ${S.busy ? 'disabled' : ''}>${ic('bowl')} Eintragen</button>
+      <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
   } else if (sh.type === 'adjust') {
     title = `Wann ist ${CATS[o].name} reingekommen?`;
     const opts = [['Gerade eben', 0], ['Vor 5 Min', 5], ['Vor 10 Min', 10], ['Vor 20 Min', 20]];
@@ -535,6 +633,10 @@ function sheetHtml() {
     else pushRow = `<div class="set-row"><div class="tx"><b>Benachrichtigungen</b><span>Noch nicht aktiviert.</span></div></div><button class="btn in sm" data-act="enablePush">${ic('bell')} Erlauben</button>`;
     inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${title}</h2><span class="sub">Angemeldet als ${esc(me().name)} · ${CATS[o].name}</span></div>
       ${pushRow}
+      <div class="set-row"><div class="tx"><b>Meldungen beim Rauslassen</b><span>Benachrichtigt werden, wenn jemand anderes aus dem Haushalt ${CATS[o].name} rauslässt oder wieder reinholt.</span></div>
+        <button class="sw" role="switch" aria-checked="${S.state.prefs.ownPush}" aria-label="Meldungen beim Rauslassen" data-act="toggleOwnPush"><i></i></button></div>
+      ${feeds() ? `<div class="set-row"><div class="tx"><b>Meldungen beim Füttern</b><span>Benachrichtigt werden, wenn jemand anderes Bonnie füttert.</span></div>
+        <button class="sw" role="switch" aria-checked="${S.state.prefs.feedPush}" aria-label="Meldungen beim Füttern" data-act="toggleFeedPush"><i></i></button></div>` : ''}
       ${q.start === q.end ? '' : `<div class="set-row"><div class="tx"><b>Ruhezeit ${q.start}–${q.end} Uhr</b><span>Erinnerungen und Nachfragen pausieren. Meldungen, wenn die andere Katze rausgeht, kommen immer an.</span></div></div>`}
       <p class="small" style="text-align:center">Freigang Version ${VERSION}</p>
       <button class="btn ghost" data-act="logout" style="${S.confirmLogout ? 'border-color:var(--out);color:var(--out-fg)' : ''}">${S.confirmLogout ? 'Wirklich abmelden? Code wird neu gebraucht' : 'Abmelden'}</button>
@@ -551,7 +653,7 @@ function screenHtml() {
   if (S.view === 'loading' || !S.state) return loadingView();
   if (S.view === 'onboarding') return onboardingView();
   const offline = S.online ? '' : `<div class="offline" role="status">Keine Verbindung – Stand von ${esc(hhmm(S.state.now))}</div>`;
-  const main = S.view === 'plan' ? planView() : S.view === 'log' && me().admin ? logView() : homeView();
+  const main = S.view === 'plan' ? planView() : S.view === 'log' && me().admin ? logView() : S.view === 'feed' && feeds() ? feedView() : homeView();
   return offline + main + tabs();
 }
 
@@ -598,6 +700,29 @@ async function setStatus(to, extra = {}, okMsg = '') {
     } else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
   } catch { S.online = false; toast('Keine Verbindung – es wurde nichts geändert.'); }
   S.busy = false; render();
+}
+
+// Preferences that live on the server, one switch at a time.
+async function setPref(key, value) {
+  try {
+    const r = await api('PUT', '/api/prefs', { [key]: value });
+    if (r.ok) { applyState(r.data.state); S.online = true; render(); } else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+  } catch { S.online = false; toast('Keine Verbindung – es wurde nichts geändert.'); }
+}
+
+// Entering a feeding never blocks: within the hour it asks first ("Trotzdem eintragen"); the server checks again, so a feeding by someone else a moment ago is caught too.
+// `at` (epoch ms) enters it afterwards; without it the feeding is "now".
+async function addFeeding(force, at) {
+  if (S.busy || !S.online) return;
+  const F = S.state.feeding;
+  if (!force && at === undefined && F.last && now() - F.last.ts < F.hintMin * 60000) { openSheet({ type: 'feedrecent', last: F.last }); return; }
+  S.busy = true; render();
+  try {
+    const r = await api('POST', '/api/feedings', { ...(force ? { force: true } : {}), ...(at === undefined ? {} : { at: Math.round(at) }) });
+    if (r.status === 409 && r.data?.error === 'recent') { S.busy = false; openSheet({ type: 'feedrecent', last: r.data.last, at }); await refresh(); return; }
+    if (r.ok) { S.sheet = null; toast(`${r.data.entry.late ? 'Nachgetragen' : 'Eingetragen'}: ${hhmm(r.data.entry.ts)} Uhr.`); } else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+  } catch { S.online = false; toast('Keine Verbindung – es wurde nichts eingetragen.'); }
+  S.busy = false; await refresh();
 }
 
 // The note only travels with a tap from "inside". From "announced" to "out" the server carries the existing note over.
@@ -654,6 +779,29 @@ const A = {
   closeSheet() { closeSheet(); },
   closeToast() { S.toast = ''; renderOverlay(); },
   settings() { S.confirmLogout = false; openSheet({ type: 'settings' }); },
+  toggleOwnPush() { return setPref('ownPush', !S.state.prefs.ownPush); },
+  toggleFeedPush() { return setPref('feedPush', !S.state.prefs.feedPush); },
+  feed() { return addFeeding(false); },
+  feedForce() { return addFeeding(true, S.sheet?.at); },
+  feedAdjust() { const p = tp(now()); openSheet({ type: 'feedwhen', time: `${p.h}:${p.mi}`, error: '' }); },
+  feedPick(d) { return addFeeding(false, now() - +d.m * 60000); },
+  feedAtTime() {
+    const r = lastClockTime(S.sheet.time);
+    if (Number.isNaN(r.at)) { S.sheet.error = 'Bitte eine Uhrzeit wählen.'; renderOverlay(); return; }
+    return addFeeding(false, r.at);
+  },
+  async unfeed(d) {
+    if (S.busy) return;
+    S.busy = true; render();
+    try {
+      const r = await api('DELETE', `/api/feedings/${+d.id}`);
+      if (r.ok) toast('Eintrag zurückgenommen.');
+      else if (r.status === 409) toast(`Zu spät – zurücknehmen geht nur ${S.state.feeding.undoMin} Minuten lang.`);
+      else if (r.status === 404) toast('Den Eintrag gibt es nicht mehr.');
+      else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+    } catch { S.online = false; toast('Keine Verbindung – es wurde nichts geändert.'); }
+    S.busy = false; await refresh();
+  },
   enablePush() { return enablePush(); },
   disablePush() { return disablePush(); },
   async testPush() {
@@ -694,7 +842,8 @@ const A = {
     try { const r = await api('DELETE', `/api/plan/${sh.id}`); if (r.ok) { await loadPlan(); S.sheet = null; render(); toast('Zeitfenster gelöscht.'); return; } } catch { /* fall through */ }
     sh.error = 'Das hat nicht geklappt.'; renderOverlay();
   },
-  logDays(d) { S.logDays = +d.d; S.log = null; render(); loadLog().then(render); },
+  logDays(d) { S.logDays = +d.d; S.logAll = false; S.log = null; render(); loadLog().then(render); },
+  logAll() { S.logAll = !S.logAll; render(); },
   note(d) {
     const i = (S.log?.incidents || []).find((x) => x.start === +d.start);
     if (i) openSheet({ type: 'note', start: i.start, when: incidentWhen(i), note: i.note || '', error: '' });
@@ -766,6 +915,7 @@ document.addEventListener('input', (ev) => {
     const h = document.getElementById('slot-hint'); if (h) h.textContent = slotHint(S.sheet);
   }
   else if (t.id === 'note-text' && S.sheet) S.sheet.note = t.value;
+  else if (t.id === 'feed-time' && S.sheet) { S.sheet.time = t.value; S.sheet.error = ''; const h = document.getElementById('feed-time-hint'); if (h) h.textContent = feedTimeHint(t.value); }
   else if (t.id === 'cat-note-text' && S.sheet) { S.sheet.text = t.value; const c = document.getElementById('cat-note-count'); if (c) c.textContent = `${Array.from(t.value).length} / ${NOTE_MAX}`; }
 });
 
