@@ -1,6 +1,6 @@
 // Runs every minute: plan reminders, "Auf geht’s" and "still outside?" nudges, sent to everyone who looks after that cat. Quiet hours (if set) silence only these.
 // Status-change pushes (api.js) are never silenced: cats are often out at dusk, which is exactly when it matters.
-import { CATS, CAT_NAME, peopleOfCat, zoned, durText, isQuiet, numVar, HOUR, MIN } from './util.js';
+import { CATS, CAT_NAME, peopleOfCat, zoned, durText, isQuiet, numVar, staleMsOf, HOUR, MIN } from './util.js';
 import { notifyUsers } from './push.js';
 import { lastEvents } from './db.js';
 import { minutesUntilStart, insideAt, addDays } from './slots.js';
@@ -14,7 +14,7 @@ export async function runCron(env, nowMs = Date.now()) {
   const tz = env.TIMEZONE || 'Europe/Berlin';
   const z = zoned(nowMs, tz);
   const quiet = isQuiet(z.hour, numVar(env.QUIET_START, 22), numVar(env.QUIET_END, 6));
-  const staleMs = numVar(env.STALE_HOURS, 5) * HOUR;
+  const staleMs = staleMsOf(env);
 
   const last = await lastEvents(env);
   const sent = [];

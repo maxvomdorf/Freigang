@@ -101,3 +101,6 @@ export function numVar(v, fallback) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+
+/** After how long an outing is probably a forgotten "Wieder drin": the cron nudge and the Ilford statistics use the same value. */
+export const staleMsOf = (env) => numVar(env.STALE_HOURS, 5) * HOUR;

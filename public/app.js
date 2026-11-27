@@ -1,6 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.7.0'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.9.0'; // same as src/version.js; a newer server version makes the app reload itself once
 const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -45,7 +45,7 @@ const store = {
 // ---------- state ----------
 const S = {
   code: '', state: null, skew: 0, tz: 'Europe/Berlin', online: true, view: 'loading',
-  plan: null, inside: [], planToday: '', planDay: 0, log: null, logDays: 7, logAll: false, feed: null,
+  plan: null, inside: [], planToday: '', planDay: 0, log: null, logDays: 7, logAll: false, logPage: 'konflikte', times: null, ilford: null, ilAt: 0, ilKey: '', ilBar: '', feed: null,
   noteDraft: '', sheet: null, toast: '', busy: false, loginError: '', loginBusy: false,
   push: { supported: false, perm: 'default', subscribed: false }, installEvent: null, confirmLogout: false,
 };
@@ -126,7 +126,10 @@ async function refresh() {
     const r = await api('GET', '/api/state');
     if (r.ok) { applyState(r.data); S.online = true; reloadIfOutdated(r.data.version); } else S.online = false;
     if (S.online && S.view === 'plan') await loadPlan();
-    if (S.online && S.view === 'log' && me().admin) await loadLog();
+    if (S.online && S.view === 'log' && me().admin) {
+      // The Ilford page reads the whole history, so it reloads only when something can have changed (see ilfordStale), not on every poll.
+      if (ilfordPage()) { if (ilfordStale()) await loadIlford(); } else if (timesPage()) await loadTimes(); else await loadLog();
+    }
     if (S.online && S.view === 'feed' && feeds()) await loadFeed();
   } catch { S.online = false; }
   render();
@@ -134,6 +137,18 @@ async function refresh() {
 async function loadPlan() { const r = await api('GET', '/api/plan'); if (r.ok) { S.plan = r.data.slots; S.inside = r.data.inside || []; S.planToday = r.data.today || ''; } }
 async function loadFeed() { const r = await api('GET', '/api/feedings?days=7'); if (r.ok) S.feed = r.data.feedings; }
 async function loadLog() { const r = await api('GET', `/api/log?days=${S.logDays}`); if (r.ok) S.log = r.data; }
+// "Ilford in Zahlen": only in Ilford's household (the server refuses everyone else).
+const ilfordOn = () => me().cat === 'ilford';
+const ilfordPage = () => ilfordOn() && S.logPage === 'ilford';
+const timesPage = () => me().admin && S.logPage === 'zeiten';
+async function loadTimes() { const r = await api('GET', '/api/times'); if (r.ok) S.times = r.data; }
+const ilfordKey = () => { const c = S.state.cats.ilford; return `${c.status}|${c.since}|${S.logDays}|${dayKey(now())}`; };
+// Reload when: nothing loaded yet, Ilford's status / the range / the day changed, an outing is running (every 2 min), otherwise every 10 min.
+const ilfordStale = () => !S.ilford || S.ilKey !== ilfordKey() || Date.now() - S.ilAt > (S.state.cats.ilford.status === 'out' ? 2 : 10) * 60000;
+async function loadIlford() {
+  const key = ilfordKey(), r = await api('GET', `/api/ilford?days=${S.logDays}`);
+  if (r.ok) { S.ilford = r.data; S.ilAt = Date.now(); S.ilKey = key; }
+}
 
 // ---------- push ----------
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -446,9 +461,30 @@ function incidentWhen(i) {
   return i.ongoing ? `${head} · seit ${hhmm(i.start)} · läuft noch` : `${head} · ${hhmm(i.start)}–${hhmm(i.end)}`;
 }
 
+const WDI = (iso) => (new Date(iso + 'T00:00:00Z').getUTCDay() + 6) % 7;
+const isoShort = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+// 'Heute', 'Gestern' or 'Mo 22.11.'
+const isoLabel = (iso) => (iso === dayKey(now()) ? 'Heute' : iso === dayKey(now() - 86400000) ? 'Gestern' : `${WD[WDI(iso)]} ${isoShort(iso)}`);
+const isoSpan = (a, b) => (a === b ? isoLabel(a) : `${isoShort(a)}–${isoShort(b)}`);
+const tsDay = (ts) => { const p = tp(ts); return `${p.y}-${p.mo}-${p.d}`; };
+const longDur = (m) => (m >= 1440 ? `${Math.floor(m / 1440)} ${m < 2880 ? 'Tag' : 'Tage'} ${Math.floor((m % 1440) / 60)} Std` : durShort(m));
+const nTage = (n) => `${n} ${n === 1 ? 'Tag' : 'Tage'}`;
+
 function logView() {
   const L = S.log;
-  let body = '<p class="empty" style="text-align:center">Lade Protokoll …</p>';
+  const pageCtl = ilfordOn() ? `<div class="seg-ctl" role="group" aria-label="Seite">${[['konflikte', 'Konflikte'], ['ilford', 'Ilford'], ['zeiten', 'Zeiten anpassen']].map(([k, t]) => `<button data-act="logPage" data-p="${k}" aria-pressed="${S.logPage === k}">${t}</button>`).join('')}</div>` : '';
+  if (timesPage()) {
+    return `<div class="scroll"><div class="page" style="gap:14px">
+      <div class="head"><div class="head-text"><h1>Protokoll</h1><p class="sub">Zeiten anpassen · nur für Ilfords Haushalt</p></div><span class="pill">Admin</span></div>
+      ${pageCtl}${timesBody(S.times)}</div></div>`;
+  }
+  if (ilfordPage()) {
+    const ranges = [7, 30].map((d) => `<button data-act="logDays" data-d="${d}" aria-pressed="${S.logDays === d}">${d} Tage</button>`).join('');
+    return `<div class="scroll"><div class="page" style="gap:14px">
+      <div class="head"><div class="head-text"><h1>Protokoll</h1><p class="sub">Ilford in Zahlen · nur für Ilfords Haushalt</p></div><span class="pill">Admin</span></div>
+      ${pageCtl}<div class="seg-ctl" role="group" aria-label="Zeitraum">${ranges}</div>${ilfordBody(S.ilford)}</div></div>`;
+  }
+  let body = `${pageCtl}<p class="empty" style="text-align:center">Lade Protokoll …</p>`;
   if (L) {
     const il = (cat, row, top) => row[cat === 'ilford' ? 'il' : 'bo'].map((s) => `<div class="seg ${cat === 'ilford' ? 'il' : 'bo'}" style="top:${top}px;height:12px;border-radius:6px;left:${s.l}%;width:${s.w}%"></div>`).join('');
     // In the 30-day view only the newest days show until "Alle anzeigen" is pressed, so the heatmap below stays within reach.
@@ -461,7 +497,7 @@ function logView() {
       <div class="txt"><b>${esc(incidentWhen(i))}</b><span class="meta">${durShort(i.minutes)} · zweite Katze: ${CATS[i.second].name}${i.catNote ? ` („${esc(i.catNote)}“)` : ''}</span>
       ${i.note ? `<em>Notiz: ${esc(i.note)}</em>` : ''}</div>${i.override ? '<span class="tag">Override</span>' : ''}</button>`).join('');
     const ranges = [7, 30].map((d) => `<button data-act="logDays" data-d="${d}" aria-pressed="${S.logDays === d}">${d} Tage</button>`).join('');
-    body = `<div class="seg-ctl" role="group" aria-label="Zeitraum">${ranges}</div><div class="kpis">
+    body = `${pageCtl}<div class="seg-ctl" role="group" aria-label="Zeitraum">${ranges}</div><div class="kpis">
         <div class="kpi"><b>${L.kpi.overlaps}</b><span>Überschneidungen</span></div>
         <div class="kpi"><b>${hMin(L.kpi.overlapMinutes)}</b><span>zusammen draußen</span></div>
         <div class="kpi"><b>${L.kpi.overrides}</b><span>mit Override</span></div></div>
@@ -480,6 +516,133 @@ function logView() {
   }
   return `<div class="scroll"><div class="page" style="gap:14px">
     <div class="head"><div class="head-text"><h1>Protokoll</h1><p class="sub">Letzte ${S.logDays} Tage · nur für Admin</p></div><span class="pill">Admin</span></div>${body}</div></div>`;
+}
+
+// ----- Ilford in Zahlen (Protokoll, only Ilford's household) -----
+const arrow = (up) => `<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="${up ? 'M5 1.5l4 7H1z' : 'M5 8.5l4-7H1z'}" fill="currentColor"/></svg>`;
+// Change against the comparison window: arrow AND words (never colour alone); the percentage only when the baseline is not tiny.
+function deltaLine(dl, count) {
+  if (!dl) return '';
+  if (dl.abs === 0) return '<span class="dl">gleich wie davor</span>';
+  const up = dl.abs > 0, n = Math.abs(dl.abs);
+  const amount = count ? String(n) : hMin(n);
+  const pct = dl.pct == null ? '' : `&nbsp;·&nbsp;${up ? '+' : '−'}${Math.abs(dl.pct)}&nbsp;%`; // stays together on one line
+  return `<span class="dl">${arrow(up)}<span>${amount} ${up ? 'mehr' : 'weniger'}${pct}</span></span>`;
+}
+const itile = (value, label, dl, count, cls = '') => `<div class="itile ${cls}"><b>${value}</b><span class="lb">${label}</span>${deltaLine(dl, count)}</div>`;
+
+function ilfordBody(I) {
+  if (!I) return '<p class="empty" style="text-align:center">Lade Zahlen …</p>';
+  if (I.empty) return '<section class="card" aria-label="Ilford in Zahlen" style="padding:16px;border-radius:24px"><h2 style="font-size:20px">Ilford in Zahlen</h2><p class="empty" style="padding:0">Noch keine Daten. Sobald Ilford draußen war, erscheinen hier Zeiten, Tagesbalken und Rekorde.</p></section>';
+  const c = I.cur, d = I.delta, n = I.days;
+  const sub = I.prev
+    ? `Letzte ${n} Tage im Vergleich zu den ${n} Tagen davor`
+    : `Letzte ${n} Tage · Vergleich mit den ${n} Tagen davor ab ${I.prevFrom}`;
+  const part = I.since.covers ? '' : `<p class="small">Erfasst seit ${I.since.label}: Der Schnitt pro Tag zählt nur die erfassten Tage.</p>`;
+  const notes = [];
+  if (c.open) notes.push('Ein Ausflug läuft noch und zählt bis jetzt. Er steht nicht bei „Typischer“ und „Längster Ausflug“.');
+  if (c.uncertain) notes.push(`${c.uncertain === 1 ? 'Ein Ausflug war' : `${c.uncertain} Ausflüge waren`} länger als ${String(I.staleHours).replace('.', ',')} Std und ${c.uncertain === 1 ? 'gilt' : 'gelten'} als unsicher (vermutlich nicht zurückgemeldet): in der Zeit enthalten, aber nicht bei „Längster Ausflug“ und den Rekorden.`);
+  const nums = `<section class="card" aria-label="Ilford in Zahlen" style="gap:10px;padding:16px;border-radius:24px">
+      <div style="display:flex;flex-direction:column;gap:3px"><h2 style="font-size:20px">Ilford in Zahlen</h2><span class="small">${sub}</span></div>
+      <div class="igrid2">
+        ${itile(hMin(c.minutes), 'draußen insgesamt', d?.minutes, false, 'wide')}
+        ${itile(c.avgPerDay == null ? '–' : hMin(c.avgPerDay), 'pro Tag im Schnitt', d?.avgPerDay, false)}
+        ${itile(String(c.outings), c.outings === 1 ? 'Ausflug' : 'Ausflüge', d?.outings, true)}
+        ${itile(c.median == null ? '–' : hMin(c.median), 'typischer Ausflug', d?.median, false)}
+        ${itile(c.longest ? hMin(c.longest.minutes) : '–', 'längster Ausflug', d?.longest, false)}
+      </div>${part}${notes.map((t) => `<p class="small">${t}</p>`).join('')}</section>`;
+  return nums + ilfordBars(I) + ilfordRecords(I);
+}
+
+function ilfordBars(I) {
+  const B = I.bars, cnt = B.length, thirty = S.logDays === 30 && I.rolling.some((v) => v != null);
+  const peak = Math.max(60, ...B.map((b) => b.minutes), I.avg || 0, ...I.rolling.map((v) => v || 0));
+  const top = Math.ceil(peak / 60) * 60;
+  const pc = (m) => +((m / top) * 100).toFixed(2);
+  const sel = B.find((b) => b.iso === S.ilBar) || B[B.length - 1];
+  const gap = cnt > 14 ? 2 : 6;
+  const txt = (b) => `${b.partial ? 'Heute' : `${b.d} ${b.date}`}: ${b.minutes ? durShort(b.minutes) : 'nicht draußen'}${b.partial ? ' bis jetzt' : ''}${b.outings ? `, ${b.outings} ${b.outings === 1 ? 'Ausflug' : 'Ausflüge'}` : ''}`;
+  const cols = B.map((b) => `<button class="icol${b === sel ? ' sel' : ''}" data-act="ilBar" data-i="${b.iso}" aria-label="${txt(b)}" aria-pressed="${b === sel}">
+      <i class="ib${b.partial ? ' today' : ''}${b.first ? ' first' : ''}${b.minutes ? '' : ' zero'}" style="${b.minutes ? `height:${pc(b.minutes)}%` : ''}"></i></button>`).join('');
+  const labels = B.map((b, i) => {
+    const show = cnt <= 14 || (cnt - 1 - i) % 6 === 0;
+    return `<span>${show ? (cnt <= 14 ? `<em>${b.partial ? 'Heute' : b.d}<br>${b.date}</em>` : `<em>${b.date}</em>`) : ''}</span>`;
+  }).join('');
+  const segs = [];
+  if (thirty) {
+    let cur = [];
+    I.rolling.forEach((v, i) => {
+      if (v == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push(`${+(((i + 0.5) / cnt) * 100).toFixed(2)},${100 - pc(v)}`);
+    });
+    if (cur.length) segs.push(cur);
+  }
+  const roll = thirty ? `<svg class="iroll" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${segs.map((p) => (p.length > 1 ? `<polyline points="${p.join(' ')}" fill="none" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` : '')).join('')}</svg>` : '';
+  const avg = I.avg == null ? '' : `<div class="iavg" style="bottom:${pc(I.avg)}%"><span>Ø ${hMin(I.avg)}</span></div>`;
+  const read = `<p class="iread" aria-live="polite"><b>${sel.partial ? 'Heute' : `${isoLabel(sel.iso)}`}</b> · ${sel.minutes ? `${durShort(sel.minutes)} draußen` : 'nicht draußen'}${sel.outings ? ` · ${sel.outings} ${sel.outings === 1 ? 'Ausflug' : 'Ausflüge'}` : ''}${sel.partial ? ' <span class="small">(bis jetzt)</span>' : ''}${sel.first ? ` <span class="small">(erst ab ${hhmm(I.since.ts)} Uhr erfasst)</span>` : ''}</p>`;
+  const legend = `<div class="legend"><span><i style="width:12px;height:12px;border-radius:3px;background:var(--ink)"></i>Zeit draußen</span><span><i class="ib today" style="width:12px;height:12px;border-radius:3px"></i>heute, bis jetzt</span>${I.avg == null ? '' : '<span><i style="width:18px;border-top:2px dashed var(--muted)"></i>Ø pro Tag</span>'}${thirty ? '<span><i style="width:18px;border-top:3px solid var(--out)"></i>7-Tage-Schnitt</span>' : ''}</div>`;
+  return `<section class="card" aria-label="Zeit draußen pro Tag" style="gap:8px;padding:16px;border-radius:24px">
+      <div style="display:flex;flex-direction:column;gap:3px"><h2 style="font-size:20px">Zeit draußen pro Tag</h2><span class="small">Tippen für Details${I.avg == null ? '' : ' · Ø zählt nur abgeschlossene, ganz erfasste Tage'}</span></div>
+      ${legend}
+      <div class="ichart" style="--gap:${gap}px">
+        <div class="igl" style="bottom:100%"><span>${hMin(top)}</span></div><div class="igl" style="bottom:50%"><span>${hMin(top / 2)}</span></div>
+        ${avg}<div class="icols">${cols}</div>${roll}</div>
+      <div class="ilabels" style="--gap:${gap}px">${labels}</div>${read}</section>`;
+}
+
+function ilfordRecords(I) {
+  const R = I.records, st = I.streaks;
+  const streak = (title, x) => `<div class="itile"><b>${nTage(x.current.days)}</b><span class="lb">${title}</span>
+      ${x.current.days ? `<span class="dl">seit ${isoLabel(x.current.from)}</span>` : ''}
+      ${x.isBest ? '<span class="best">Bestwert</span>' : x.best.days ? `<span class="dl">Bestwert: ${nTage(x.best.days)} (${isoSpan(x.best.from, x.best.to)})</span>` : ''}</div>`;
+  const row = (label, value, detail) => `<div class="rec"><div><b>${label}</b><span>${detail}</span></div><strong>${value}</strong></div>`;
+  const none = 'noch kein Ausflug';
+  const inside = R.longestInside;
+  const rows = [
+    row('Längster Ausflug', R.longest ? durShort(R.longest.minutes) : '–', R.longest ? isoLabel(R.longest.date) : none),
+    row('Meiste Zeit an einem Tag', R.mostMinutes ? durShort(R.mostMinutes.minutes) : '–', R.mostMinutes ? isoLabel(R.mostMinutes.date) : none),
+    row('Meiste Ausflüge an einem Tag', R.mostOutings ? String(R.mostOutings.count) : '–', R.mostOutings ? isoLabel(R.mostOutings.date) : none),
+    row('Längste Zeit am Stück drinnen', inside ? longDur(inside.minutes) : '–', inside ? (inside.open ? `läuft seit ${isoLabel(tsDay(inside.ts))}` : isoSpan(tsDay(inside.ts), tsDay(inside.ts + inside.minutes * 60000))) : '–'),
+  ].join('');
+  return `<section class="card" aria-label="Serien und Rekorde" style="gap:10px;padding:16px;border-radius:24px">
+      <div style="display:flex;flex-direction:column;gap:3px"><h2 style="font-size:20px">Serien &amp; Rekorde</h2><span class="small">Seit ${I.since.label} · unabhängig vom Zeitraum oben</span></div>
+      <div class="igrid2">${streak('Tage in Folge draußen', st.out)}${streak('Tage in Folge ohne Ausflug', st.none)}</div>
+      <div class="recs">${rows}</div>
+      <p class="small">Rekorde zählen nur Ausflüge bis ${String(I.staleHours).replace('.', ',')} Std. Ein Tag zählt als „draußen“, wenn Ilford mindestens eine Minute draußen war. Der heutige Tag verändert eine Serie erst, wenn Ilford draußen war.</p></section>`;
+}
+
+// ----- Zeiten anpassen (Protokoll, admins, own cat, last 24 hours) -----
+// "heute um 06:42 Uhr", "gestern um 23:40 Uhr", "Mo 23.11. um 09:05 Uhr"
+const whenDay = (ts) => feedWhen(ts).replace(/^um /, 'heute um ');
+// "HH:MM" → the latest moment <= hi that shows this time on the clock. hi is at most 24 h back, so there is only one candidate.
+function clockBefore(t, hi) {
+  const m = textToMin(t);
+  if (Number.isNaN(m)) return NaN;
+  const p = tp(hi), hiMin = +p.h * 60 + +p.mi, back = m <= hiMin ? hiMin - m : hiMin + 1440 - m;
+  return hi - +p.s * 1000 - back * 60000;
+}
+const rangeText = (sh) => `zwischen ${whenDay(sh.lo)} und ${sh.hi >= now() - 60000 ? 'jetzt' : whenDay(sh.hi)}`;
+// → { at, ts } or { error } (and `at` when the clock time is fine but outside the range). The server checks the range again.
+function resolveEdit(sh) {
+  const at = clockBefore(sh.time, sh.hi);
+  if (Number.isNaN(at)) return { error: 'Bitte eine Uhrzeit wählen.' };
+  if (at < Math.floor(sh.lo / 60000) * 60000) return { at, error: `Die Uhrzeit muss ${rangeText(sh)} liegen.` };
+  return { at, ts: Math.max(at, sh.lo) };
+}
+
+function timesBody(T) {
+  const nm = CATS[ownCat()].name;
+  const head = `<div style="display:flex;flex-direction:column;gap:3px"><h2 style="font-size:20px">Zeiten anpassen</h2><span class="small">Rein- und Raus-Zeiten der letzten 24 Stunden korrigieren, zum Beispiel wenn ${esc(nm)} nachts reinkam und der Button erst morgens gedrückt wurde. Die Reihenfolge der Einträge bleibt dabei erhalten.</span></div>`;
+  const row = (r) => {
+    const [d, date] = feedDayLabel(r.ts);
+    const edited = r.edited ? `<span>angepasst von ${esc(r.edited.by)} · vorher ${esc(feedWhen(r.edited.orig).replace(/^um /, ''))}</span>` : '';
+    return `<div class="rec"><div><b>${esc(nm)} ${r.status === 'in' ? 'kam rein' : 'ging raus'}</b><span>${d} ${date} · ${hhmm(r.ts)} Uhr</span>${edited}</div>
+      ${r.editable ? `<button class="btn ghost" data-act="timeEdit" data-id="${r.id}" aria-label="Zeit ändern: ${esc(nm)} ${r.status === 'in' ? 'kam rein' : 'ging raus'}, ${d} ${hhmm(r.ts)} Uhr">${ic('clock')} Zeit ändern</button>` : '<span class="small">nicht änderbar</span>'}</div>`;
+  };
+  const list = !T ? '<p class="empty" style="padding:0">Lade Einträge …</p>'
+    : !T.rows.length ? `<p class="empty" style="padding:0">In den letzten 24 Stunden gab es keinen Rein- oder Raus-Eintrag.</p>`
+    : `<div class="recs">${T.rows.map(row).join('')}</div>`;
+  return `<section class="card" aria-label="Zeiten anpassen" style="gap:10px;padding:16px;border-radius:24px">${head}${list}
+    <p class="small">Geändert wird nur die Uhrzeit, nicht der Status. Die ursprüngliche Zeit und wer geändert hat bleiben gespeichert (auch im CSV-Export).</p></section>`;
 }
 
 // ----- feeding (Bonnie's household) -----
@@ -503,7 +666,7 @@ function lastClockTime(t) {
   const m = textToMin(t);
   if (Number.isNaN(m)) return { at: NaN };
   const p = tp(now()), nowMin = +p.h * 60 + +p.mi, back = m <= nowMin ? nowMin - m : nowMin + 1440 - m;
-  return { at: now() - +p.s * 1000 - back * 60000, yesterday: m > nowMin };
+  return { at: now() - +p.s * 1000 - back * 60000, back, yesterday: m > nowMin };
 }
 const feedTimeHint = (t) => { const r = lastClockTime(t); return Number.isNaN(r.at) ? '' : `${r.yesterday ? 'Gestern' : 'Heute'} um ${minToText(textToMin(t))} Uhr`; };
 
@@ -643,7 +806,22 @@ function sheetHtml() {
     title = `Wann ist ${CATS[o].name} reingekommen?`;
     const opts = [['Gerade eben', 0], ['Vor 5 Min', 5], ['Vor 10 Min', 10], ['Vor 20 Min', 20]];
     inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${esc(title)}</h2><span class="sub">Damit das Protokoll stimmt.</span></div>
-      <div class="grid2">${opts.map(([l, m]) => `<button class="opt" data-act="adjustPick" data-m="${m}">${l}</button>`).join('')}</div>
+      <div class="grid2">${opts.map(([l, m]) => `<button class="opt" data-act="adjustPick" data-m="${m}" ${S.busy ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+      <div class="field"><label for="adjust-time">Oder genaue Uhrzeit (bis 24 Std zurück)</label><input class="input text" id="adjust-time" type="time" step="60" value="${esc(sh.time)}"></div>
+      <span class="small" id="adjust-time-hint">${esc(feedTimeHint(sh.time))}</span>
+      ${sh.error ? `<p class="err" role="alert">${esc(sh.error)}</p>` : ''}
+      <button class="btn in sm" data-act="adjustAtTime" ${S.busy ? 'disabled' : ''}>${ic('doorin')} Eintragen</button>
+      <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
+  } else if (sh.type === 'timeedit') {
+    const nm = CATS[ownCat()].name, inn = sh.status === 'in', res = resolveEdit(sh);
+    title = inn ? `Wann kam ${nm} rein?` : `Wann ging ${nm} raus?`;
+    const hint = res.at == null ? '' : `${cap(whenDay(res.at))}${res.error ? ' – außerhalb des möglichen Zeitraums' : ''}`;
+    inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${esc(title)}</h2><span class="sub">Aktuell eingetragen: ${esc(whenDay(sh.ts))}</span></div>
+      <div class="field"><label for="edit-time">Neue Uhrzeit</label><input class="input text" id="edit-time" type="time" step="60" value="${esc(sh.time)}"></div>
+      <span class="small" id="edit-time-hint">${esc(hint)}</span>
+      <span class="small">Möglich ist ${esc(rangeText(sh))}.</span>
+      ${sh.error ? `<p class="err" role="alert">${esc(sh.error)}</p>` : ''}
+      <button class="btn in sm" data-act="timeSave" ${S.busy ? 'disabled' : ''}>${ic('check')} Speichern</button>
       <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
   } else if (sh.type === 'slot') {
     const inn = sh.kind === 'in', edit = !!sh.id, name = CATS[o].name;
@@ -824,7 +1002,42 @@ const A = {
   soon() { setStatus('soon', { soonMin: SOON_MIN, ...noteExtra() }, `${me().otherName} ist vorgewarnt.`); },
   cancelSoon() { setStatus('in', {}, `${me().otherName} weiß Bescheid.`); },
   back() { setStatus('in', {}, `${me().otherName} wurde benachrichtigt.`); },
-  adjust() { openSheet({ type: 'adjust' }); },
+  adjust() { const p = tp(now()); openSheet({ type: 'adjust', time: `${p.h}:${p.mi}`, error: '' }); },
+  timeEdit(d) {
+    const r = S.times?.rows.find((x) => x.id === +d.id);
+    if (!r || !r.editable) return;
+    openSheet({ type: 'timeedit', id: r.id, status: r.status, ts: r.ts, lo: r.lo, hi: r.hi, time: hhmm(r.ts), error: '' });
+  },
+  async timeSave() {
+    if (S.busy) return;
+    const sh = S.sheet, nm = CATS[ownCat()].name;
+    const el = document.getElementById('edit-time'); if (el?.value) sh.time = el.value; // read what is on the clock wheel right now (iOS)
+    const r = resolveEdit(sh);
+    if (r.error) { sh.error = r.error; renderOverlay(); return; }
+    if (Math.floor(r.ts / 60000) === Math.floor(sh.ts / 60000)) { closeSheet(); toast('Die Zeit ist unverändert.'); return; }
+    S.busy = true; render();
+    try {
+      const x = await api('POST', '/api/times', { id: sh.id, ts: Math.round(r.ts) });
+      if (x.ok) {
+        applyState(x.data.state); S.online = true; S.sheet = null;
+        S.times = { rows: x.data.rows }; S.ilford = null; S.log = null; // the numbers on the other pages are out of date now
+        toast(`Zeit angepasst: ${nm} ${sh.status === 'in' ? 'kam' : 'ging'} ${feedWhen(r.ts)} ${sh.status === 'in' ? 'rein' : 'raus'}.`);
+      } else if (x.status === 409) {
+        S.sheet = null; await loadTimes();
+        toast(x.data?.error === 'too_old' ? 'Der Eintrag ist älter als 24 Stunden und kann nicht mehr geändert werden.' : 'Der Eintrag hat sich inzwischen geändert. Bitte die Liste prüfen.');
+      } else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+    } catch { S.online = false; toast('Keine Verbindung – es wurde nichts geändert.'); }
+    S.busy = false; render();
+  },
+  adjustAtTime() {
+    const sh = S.sheet, c = S.state.cats[ownCat()], name = CATS[ownCat()].name;
+    const el = document.getElementById('adjust-time'); if (el?.value) sh.time = el.value; // read what is on the clock wheel right now (iOS)
+    const r = lastClockTime(sh.time);
+    if (Number.isNaN(r.at)) { sh.error = 'Bitte eine Uhrzeit wählen.'; renderOverlay(); return; }
+    // The server would quietly move an earlier time up to the start of the outing: say it instead.
+    if (Math.floor(r.at / 60000) < Math.floor(c.since / 60000)) { sh.error = `${name} ist erst ${feedWhen(c.since)} rausgegangen. Bitte eine spätere Zeit wählen.`; renderOverlay(); return; }
+    return setStatus('in', { agoMin: r.back }, `Eingetragen: ${name} ist seit ${r.yesterday ? 'gestern ' : ''}${minToText(textToMin(sh.time))} drin.`);
+  },
   adjustPick(d) {
     const m = +d.m;
     setStatus('in', { agoMin: m }, m ? `Eingetragen: ${CATS[ownCat()].name} ist seit ${hhmm(now() - m * 60000)} drin.` : `${me().otherName} wurde benachrichtigt.`);
@@ -909,7 +1122,12 @@ const A = {
     try { const r = await api('DELETE', `/api/plan/${sh.id}`); if (r.ok) { await loadPlan(); S.sheet = null; render(); toast(sh.kind === 'in' ? 'Drinnen-Zeit gelöscht.' : 'Zeitfenster gelöscht.'); return; } } catch { /* fall through */ }
     sh.error = 'Das hat nicht geklappt.'; renderOverlay();
   },
-  logDays(d) { S.logDays = +d.d; S.logAll = false; S.log = null; render(); loadLog().then(render); },
+  logDays(d) { S.logDays = +d.d; S.logAll = false; S.log = null; S.ilford = null; S.ilBar = ''; render(); (ilfordPage() ? loadIlford() : loadLog()).then(render); },
+  logPage(d) {
+    if (!ilfordOn() || !['konflikte', 'ilford', 'zeiten'].includes(d.p)) return;
+    S.logPage = d.p; store.set('logPage', d.p); S.logAll = false; render(); refresh();
+  },
+  ilBar(d) { S.ilBar = d.i; render(); },
   logAll() { S.logAll = !S.logAll; render(); },
   note(d) {
     const i = (S.log?.incidents || []).find((x) => x.start === +d.start);
@@ -936,8 +1154,8 @@ async function exportCsv() {
     const st = { in: 'drinnen', soon: 'gleich draußen', out: 'draußen' };
     const f = (ts) => { const p = tp(ts); return `${p.y}-${p.mo}-${p.d} ${p.h}:${p.mi}:${p.s}`; };
     const q = (v) => { const s = String(v ?? ''); return /[;"\r\n]/.test(s) || /^[=+\-@\t]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const lines = ['Zeit;Katze;Status;Vorher;Erfasst von;Eingetragen um;Override;Hinweis'];
-    for (const e of r.data.events) lines.push([f(e.ts), CATS[e.cat].name, st[e.status], st[e.prev_status] || '', e.actor, f(e.recorded_at), e.override ? 'ja' : '', e.note || ''].map(q).join(';'));
+    const lines = ['Zeit;Katze;Status;Vorher;Erfasst von;Eingetragen um;Override;Hinweis;Ursprüngliche Zeit;Angepasst von'];
+    for (const e of r.data.events) lines.push([f(e.ts), CATS[e.cat].name, st[e.status], st[e.prev_status] || '', e.actor, f(e.recorded_at), e.override ? 'ja' : '', e.note || '', e.orig_ts ? f(e.orig_ts) : '', e.edited_by || ''].map(q).join(';'));
     const csv = '﻿' + lines.join('\r\n') + '\r\n';
     const name = `freigang-protokoll-${dayKey(now())}.csv`;
     const file = new File([csv], name, { type: 'text/csv' });
@@ -982,6 +1200,12 @@ document.addEventListener('input', (ev) => {
     const h = document.getElementById('slot-hint'); if (h) h.textContent = slotHint(S.sheet);
   }
   else if (t.id === 'note-text' && S.sheet) S.sheet.note = t.value;
+  else if (t.id === 'adjust-time' && S.sheet) { S.sheet.time = t.value; S.sheet.error = ''; const h = document.getElementById('adjust-time-hint'); if (h) h.textContent = feedTimeHint(t.value); }
+  else if (t.id === 'edit-time' && S.sheet) {
+    S.sheet.time = t.value; S.sheet.error = '';
+    const r = resolveEdit(S.sheet), h = document.getElementById('edit-time-hint');
+    if (h) h.textContent = r.at == null ? '' : `${cap(whenDay(r.at))}${r.error ? ' – außerhalb des möglichen Zeitraums' : ''}`;
+  }
   else if (t.id === 'feed-time' && S.sheet) { S.sheet.time = t.value; S.sheet.error = ''; const h = document.getElementById('feed-time-hint'); if (h) h.textContent = feedTimeHint(t.value); }
   else if (t.id === 'cat-note-text' && S.sheet) { S.sheet.text = t.value; const c = document.getElementById('cat-note-count'); if (c) c.textContent = `${Array.from(t.value).length} / ${NOTE_MAX}`; }
 });
@@ -1023,6 +1247,7 @@ async function startSession(st) {
   applyState(st); S.online = true;
   store.set('code', S.code);
   S.view = store.get('onboarded') ? 'home' : 'onboarding';
+  S.logPage = ['ilford', 'zeiten'].includes(store.get('logPage')) ? store.get('logPage') : 'konflikte';
   S.planDay = tp(now()).wd;
   await readPush();
   render();

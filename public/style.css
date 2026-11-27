@@ -257,3 +257,39 @@ textarea.input { height: 110px; padding: 12px 16px; resize: none; line-height: 1
 .slot.inn .time { font-size: 17px; }
 .slot.cancel .time { text-decoration: line-through; opacity: .55; }
 .slot .info span svg { flex: none; }
+
+/* ---- Protokoll > Ilford in Zahlen ---- */
+.igrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.itile { background: var(--tile); border-radius: 16px; padding: 12px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.itile.wide { grid-column: 1 / -1; }
+.itile b { font-family: var(--serif); font-weight: 600; font-size: 28px; line-height: 1.05; }
+.itile .lb { font-size: 12px; color: var(--muted); line-height: 1.3; }
+.dl { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink); line-height: 1.3; margin-top: 2px; }
+.dl svg { flex: none; }
+.best { align-self: flex-start; margin-top: 2px; padding: 3px 10px; border-radius: 999px; background: var(--in-bg); color: var(--in-fg); font-weight: 700; font-size: 12px; }
+.ichart { position: relative; height: 132px; margin-top: 16px; }
+.icols { position: absolute; inset: 0; display: flex; gap: var(--gap); }
+.icol { flex: 1; min-width: 0; display: flex; align-items: flex-end; justify-content: center; padding: 0; border: 0; background: transparent; border-radius: 8px; }
+.icol.sel { background: rgba(184, 83, 31, .12); }
+.ib { display: block; width: 100%; max-width: 30px; min-height: 3px; background: var(--ink); border-radius: 5px 5px 2px 2px; }
+.ib.today { box-sizing: border-box; border: 1.5px solid var(--ink); background: repeating-linear-gradient(135deg, var(--ink) 0 2.5px, transparent 2.5px 5.5px); }
+.ib.first { opacity: .55; }
+.ib.zero { height: 3px; background: var(--line); }
+.igl { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line2); pointer-events: none; }
+.igl span { position: absolute; right: 0; bottom: 1px; font-size: 10px; color: var(--muted); }
+.iavg { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--muted); pointer-events: none; z-index: 2; }
+.iavg span { position: absolute; left: 0; bottom: 2px; padding: 0 5px; border-radius: 6px; background: var(--card); font-size: 11px; font-weight: 700; color: var(--muted); }
+.iroll polyline { stroke: var(--out); }
+.iroll { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; overflow: visible; }
+.ilabels { display: flex; gap: var(--gap); }
+.ilabels span { flex: 1; min-width: 0; position: relative; height: 30px; }
+.ilabels em { position: absolute; left: 50%; top: 0; transform: translateX(-50%); font-style: normal; font-size: 11px; line-height: 1.25; color: var(--muted); text-align: center; white-space: nowrap; }
+.iread { font-size: 14px; line-height: 1.4; padding-top: 4px; border-top: 1px solid var(--line2); }
+.recs .rec { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line2); }
+.rec > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rec b { font-size: 14px; }
+.rec span { font-size: 12px; color: var(--muted); }
+.rec strong { font-family: var(--serif); font-weight: 600; font-size: 20px; white-space: nowrap; }
+
+/* ---- Protokoll > Zeiten anpassen ---- */
+.recs .rec .btn { width: auto; flex: none; min-height: 44px; padding: 0 16px; font-size: 14px; }

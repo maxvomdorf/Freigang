@@ -107,7 +107,7 @@ Tipp: Schick jeden Link in einer privaten Nachricht. Wer den Link hat, kann die 
 | Jetzt | Statusbanner, deine Katze mit dem großen Knopf und einem optionalen Hinweis („In Begleitung“, „Nur kurz draußen“ oder eigener Text bis 40 Zeichen), die andere Katze nur lesbar mit ihrem Hinweis, der Verlauf von heute (0 bis 24 Uhr) |
 | Plan | Draußen-Fenster pro Katze (wöchentlich, zu jeder Uhrzeit, auch über Mitternacht), Erinnerung 15 Min vorher, Hinweis bei Überschneidung. Dazu „Drinnen“-Einträge, ganztägig oder mit Uhrzeit, einmalig oder jede Woche: Ein einmaliger Eintrag, der den Beginn eines Draußen-Fensters abdeckt, lässt dieses Fenster an dem Tag entfallen (keine Erinnerung, durchgestrichen im Plan). Auf „Jetzt“ steht dann „Bleibt laut Plan … drinnen“ (nur Information, Rauslassen bleibt möglich) |
 | Füttern | Nur für Bonnies Haushalt (Kathrin, Linus, Oskar, Anna-Lena): Knopf „Bonnie füttern“ trägt Uhrzeit und Name ein, darunter die Liste der letzten 7 Tage nach Tagen. Wurde Bonnie in der letzten Stunde schon gefüttert, erscheint ein Hinweis, und es fragt vor dem Eintragen nach. Vergessene Fütterungen trägt man über „Früher gefüttert? Zeit anpassen“ nach (Schnellwahl oder genaue Uhrzeit, bis 24 Stunden zurück); sie stehen in der Liste mit „nachgetragen“. Den eigenen Eintrag kann man 10 Minuten lang mit „Rückgängig“ zurücknehmen, gezählt ab dem Moment des Eintragens. Ilfords Haushalt sieht diese Ansicht nie und bekommt nie eine Meldung dazu |
-| Protokoll | Nur für die Admins (Maxime, Janin): Kennzahlen, Tagesbänder, Heatmap, Vorfälle mit Notizen, CSV-Export, 7 oder 30 Tage |
+| Protokoll | Nur für die Admins (Maxime, Janin): Kennzahlen, Tagesbänder, Heatmap, Vorfälle mit Notizen, CSV-Export, 7 oder 30 Tage. Oben umschalten auf **Ilford** (nur Ilfords Haushalt): „Ilford in Zahlen“ mit Vergleich zum Zeitraum davor, Tagesbalken mit Schnittlinie sowie Serien und Rekorde. Der Vergleich erscheint erst, wenn genug Verlauf da ist („Vergleich ab …“). Dritte Seite **Zeiten anpassen**: Rein- und Raus-Zeiten der letzten 24 Stunden nachträglich korrigieren (mit Spur der ursprünglichen Zeit) |
 | Einstellungen (oben rechts) | Benachrichtigungen an/aus, Testnachricht, Meldungen beim Rauslassen an/aus, Meldungen beim Füttern an/aus (nur Bonnies Haushalt), Abmelden |
 
 Wer Bonnie füttert, löst eine Nachricht an den Rest von Bonnies Haushalt aus („Bonnie wurde gefüttert – Linus um 08:12 Uhr“), außer bei denen, die „Meldungen beim Füttern“ ausgeschaltet haben. Bei einem Nachtrag steht „(nachgetragen)“ dabei. Nimmt jemand den Eintrag zurück, ersetzt eine Korrektur die Nachricht.
@@ -169,7 +169,7 @@ Der Test spricht mit dem laufenden Worker und spielt alle Personen: Anmeldung, S
 ## Aufbau
 
 ```
-src/        Worker: api.js (Routen, Statusregeln), slots.js (Plan-Rechnung), feeding.js (Fütterungstracker), cron.js (Erinnerungen), push.js + webpush.js (Web Push), stats.js (Protokoll-Rechnung)
+src/        Worker: api.js (Routen, Statusregeln), slots.js (Plan-Rechnung), feeding.js (Fütterungstracker), cron.js (Erinnerungen), push.js + webpush.js (Web Push), stats.js (Protokoll-Rechnung), ilford.js (Ilford in Zahlen), times.js (Regeln fürs Anpassen von Zeiten)
 public/     Die App: index.html, app.js, style.css, sw.js (offline + Push), Manifest, Icons, Katzenbilder, Schriften
 migrations/ Datenbankschema
 scripts/    setup, links, keys, deploy

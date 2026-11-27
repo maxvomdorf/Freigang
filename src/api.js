@@ -1,10 +1,12 @@
 // HTTP API. Every route except none requires a personal access code (Authorization: Bearer <code>).
 import {
-  CATS, CAT_NAME, PEOPLE, otherCat, peopleOfCat, OTHER_NAME, json, clamp, MIN, HOUR, zoned, localToUtc, hhmm, numVar, FEED_CAT, FEED_HINT_MIN, FEED_UNDO_MIN,
+  CATS, CAT_NAME, PEOPLE, otherCat, peopleOfCat, OTHER_NAME, json, clamp, MIN, HOUR, zoned, localToUtc, hhmm, numVar, staleMsOf, FEED_CAT, FEED_HINT_MIN, FEED_UNDO_MIN,
 } from './util.js';
 import { feedingRoutes, feedingOut, lastFeeding } from './feeding.js';
 import { notifyUser, notifyUsers } from './push.js';
 import { buildLog, todayStrip } from './stats.js';
+import { ilfordStats } from './ilford.js';
+import { checkEdit, editBounds, lockedReason } from './times.js';
 import { lastEvents, eventsSince } from './db.js';
 import { normalize, overlapsWeek, nextDate, addDays, daysBetween, insideAt, DAY_MIN } from './slots.js';
 import { VERSION } from './version.js';
@@ -143,7 +145,8 @@ async function setStatus(env, ctx, me, body) {
   const note = noteForNewEvent(to, cur, last[cat]?.note, body);
 
   let ts = now;
-  const ago = clamp(Math.round(numVar(body.agoMin, 0)), 0, 240);
+  // "Kam früher rein" may reach back a whole day; backdating an "out" stays at 4 h (and is not offered in the app).
+  const ago = clamp(Math.round(numVar(body.agoMin, 0)), 0, to === 'in' ? 1440 : 240);
   if (ago > 0 && to !== 'soon') ts = Math.max(now - ago * MIN, last[cat]?.ts ?? 0);
   const soonMin = clamp(Math.round(numVar(body.soonMin, 15)), 1, 60);
   const soonUntil = to === 'soon' ? now + soonMin * MIN : null;
@@ -185,6 +188,58 @@ async function noteOnStatus(env, ctx, me, body) {
     ctx.waitUntil(pushStatus(env, me, msg, now, true));
   }
   return json({ ok: true, state: await buildState(env, me, now) });
+}
+
+// ---------- correct times (admins, own cat, last 24 hours) ----------
+
+/** Rein/Raus events of the cat from the last 24 hours, newest first, each with the range its time may move within. */
+async function timesList(env, cat, now) {
+  const from = now - 24 * 3600000;
+  const [{ results }, before] = await Promise.all([
+    env.DB.prepare('SELECT id, status, ts, recorded_at, orig_ts, edited_by, edited_at FROM events WHERE cat = ? AND ts >= ? ORDER BY id').bind(cat, from).all(),
+    env.DB.prepare('SELECT ts FROM events WHERE cat = ? AND ts < ? ORDER BY id DESC LIMIT 1').bind(cat, from).first(),
+  ]);
+  const rows = results.map((r, i) => {
+    const { lo, hi } = editBounds({ prevTs: i ? results[i - 1].ts : before?.ts, nextTs: results[i + 1]?.ts, now });
+    return {
+      id: r.id, status: r.status, ts: r.ts, recordedAt: r.recorded_at, lo, hi,
+      editable: lockedReason(r, now) === null && lo <= hi,
+      edited: r.orig_ts == null ? null : { orig: r.orig_ts, by: PEOPLE[r.edited_by]?.name ?? r.edited_by, at: r.edited_at },
+    };
+  });
+  return rows.filter((r) => r.status !== 'soon').reverse();
+}
+
+async function timesRoute(request, env, me, now) {
+  if (request.method === 'GET') return json({ now, rows: await timesList(env, me.cat, now) });
+  const b = await request.json().catch(() => ({}));
+  const id = Number(b.id), ts = Number(b.ts);
+  if (!Number.isInteger(id)) return json({ error: 'bad_request' }, 400);
+  // Only the own cat: an id of the other cat looks like a missing one.
+  const ev = await env.DB.prepare('SELECT id, cat, status, ts FROM events WHERE id = ? AND cat = ?').bind(id, me.cat).first();
+  if (!ev) return json({ error: 'not_found' }, 404);
+  const [prev, next] = await Promise.all([
+    env.DB.prepare('SELECT ts FROM events WHERE cat = ? AND id < ? ORDER BY id DESC LIMIT 1').bind(me.cat, id).first(),
+    env.DB.prepare('SELECT ts FROM events WHERE cat = ? AND id > ? ORDER BY id LIMIT 1').bind(me.cat, id).first(),
+  ]);
+  const chk = checkEdit({ ev, prevTs: prev?.ts, nextTs: next?.ts, ts, now });
+  if (!chk.ok) return json({ error: chk.code, lo: chk.lo, hi: chk.hi }, chk.code === 'bad_ts' ? 400 : 409);
+  if (ts === ev.ts) return json({ ok: true, noop: true, rows: await timesList(env, me.cat, now), state: await buildState(env, me, now) });
+  // One guarded write: if a neighbour appeared or moved, or the event itself changed since the read, nothing is written.
+  const [upd] = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE events SET ts = ?1, orig_ts = COALESCE(orig_ts, ?2), edited_by = ?3, edited_at = ?4
+       WHERE id = ?5 AND cat = ?6 AND status IN ('in', 'out') AND ts = ?2
+         AND ?1 >= COALESCE((SELECT ts FROM events WHERE cat = ?6 AND id < ?5 ORDER BY id DESC LIMIT 1), 0)
+         AND ?1 <= COALESCE((SELECT ts FROM events WHERE cat = ?6 AND id > ?5 ORDER BY id LIMIT 1), ?4)`,
+    ).bind(ts, ev.ts, me.user, now, id, me.cat),
+    // An incident note hangs on the start time of its overlap: it moves with the event (only if the update above went through).
+    env.DB.prepare(
+      'UPDATE OR IGNORE incident_notes SET start_ts = ?1 WHERE start_ts = ?2 AND EXISTS (SELECT 1 FROM events WHERE id = ?3 AND ts = ?1 AND edited_at = ?4)',
+    ).bind(ts, ev.ts, id, now),
+  ]);
+  if ((upd.meta?.changes ?? 0) !== 1) return json({ error: 'changed' }, 409);
+  return json({ ok: true, rows: await timesList(env, me.cat, now), state: await buildState(env, me, now) });
 }
 
 // ---------- plan ----------
@@ -359,6 +414,20 @@ export async function handleApi(request, env, ctx) {
       if (has('feedPush')) stmts.push(env.DB.prepare('INSERT INTO user_prefs (user, feed_push) VALUES (?1, ?2) ON CONFLICT(user) DO UPDATE SET feed_push = ?2').bind(me.user, b.feedPush ? 1 : 0));
       await env.DB.batch(stmts);
       return json({ ok: true, state: await buildState(env, me, now) });
+    }
+
+    // Correct Rein/Raus times of the last 24 hours: admins only, always for their own cat.
+    if (path === '/api/times') {
+      if (!me.admin) return json({ error: 'forbidden' }, 403);
+      if (m === 'GET' || m === 'POST') return timesRoute(request, env, me, now);
+    }
+
+    // "Ilford in Zahlen": only Ilford's household may see these numbers (nothing is sent to anyone else).
+    if (path === '/api/ilford' && m === 'GET') {
+      if (me.cat !== 'ilford') return json({ error: 'forbidden' }, 403);
+      const days = url.searchParams.get('days') === '30' ? 30 : 7;
+      const { results } = await env.DB.prepare("SELECT id, ts, status FROM events WHERE cat = 'ilford' ORDER BY ts, id").all();
+      return json(ilfordStats({ events: results, now, days, tz: tzOf(env), staleMs: staleMsOf(env) }));
     }
 
     if (path === '/api/log' || path === '/api/export' || path === '/api/note') {

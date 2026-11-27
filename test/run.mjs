@@ -345,9 +345,9 @@ try {
     sql('DELETE FROM schedule_slots;');
 
     // the one-off cancels an outside window's reminder (when it covers the window's start), per cat
-    // (from 23:00 on a window starting in 6-10 minutes would begin after midnight: skipped then, so a late push does not turn CI red)
+    // (the window starts in 6-10 minutes and lasts 20: from 22:30 on it would run past midnight, so these checks are skipped then and a late push does not turn CI red)
     const ref = berlin();
-    if (ref.min >= 1380) console.log('  skip  reminder checks (late evening)');
+    if (ref.min >= 1350) console.log('  skip  reminder checks (late evening)');
     else {
       const wS = Math.ceil((ref.min + 6) / 5) * 5; // an outside window starting in 6–10 minutes
       ok(wS + 20 <= 1380, 'test window starts today at ' + wS);
@@ -518,6 +518,96 @@ try {
   ok(leg.undoable === true && leg.late === false && leg.rec === leg.ts, 'an entry from before this update (no entry time) counts from its own time');
   await sleep(500); drain();
   sql('DELETE FROM feedings; DELETE FROM user_prefs;');
+  console.log('Ilford in Zahlen (Ilford\'s household only)');
+  sql('DELETE FROM events;');
+  const nowI = nowMs();
+  sql(`INSERT INTO events (cat, status, prev_status, ts, recorded_at, actor) VALUES ('ilford', 'in', NULL, ${nowI - 3 * 24 * H}, ${nowI - 3 * 24 * H}, 'maxime'), ('ilford', 'out', 'in', ${nowI - 2 * 24 * H}, ${nowI - 2 * 24 * H}, 'maxime'), ('ilford', 'in', 'out', ${nowI - 2 * 24 * H + 90 * 60000}, ${nowI - 2 * 24 * H + 90 * 60000}, 'maxime')`);
+  for (const who2 of ['maxime', 'janin']) {
+    const r = await api(who2, 'GET', '/api/ilford?days=7');
+    ok(r.status === 200 && r.body.empty === false && r.body.days === 7 && r.body.cur.minutes === 90 && r.body.cur.outings === 1, `${who2} gets the numbers (one 90-minute outing)`);
+    ok(r.body.prev === null && r.body.since.covers === false && r.body.bars.length >= 3 && r.body.bars.length <= 4 && Array.isArray(r.body.rolling) && r.body.streaks.out && r.body.records.longest.minutes === 90, `${who2}: three days of history, no comparison yet, bars, streaks and records are there`);
+  }
+  ok((await api('maxime', 'GET', '/api/ilford?days=30')).body.days === 30 && (await api('maxime', 'GET', '/api/ilford?days=5')).body.days === 7 && (await api('maxime', 'GET', '/api/ilford')).body.days === 7, 'only 7 and 30 days exist, everything else is 7');
+  for (const who2 of ['kathrin', 'linus', 'oskar', 'annalena']) {
+    const r = await api(who2, 'GET', '/api/ilford?days=7');
+    ok(r.status === 403 && JSON.stringify(r.body) === '{"error":"forbidden"}', `${who2} gets 403 and no data`);
+  }
+  ok((await api('maxime', 'POST', '/api/ilford')).status === 404, 'read-only: no other method');
+  sql('DELETE FROM events;');
+
+  console.log('Zeiten anpassen (admins, own cat, last 24 hours)');
+  // ids ascend with the inserts: old "in" (30 h), soon (10.5 h), out (10 h), "in" pressed this morning (1 h); Bonnie out 5 h and in 4 h ago
+  const t0 = nowMs(), min = 60000;
+  const ins = (cat, st, prev, ts, extra = 'NULL') => `INSERT INTO events (cat, status, prev_status, ts, recorded_at, actor, soon_until) VALUES ('${cat}', '${st}', ${prev ? `'${prev}'` : 'NULL'}, ${ts}, ${ts}, 'x', ${extra});`;
+  sql([ins('ilford', 'in', null, t0 - 30 * H), ins('ilford', 'soon', 'in', t0 - 10.5 * H, t0 - 10.25 * H), ins('ilford', 'out', 'soon', t0 - 10 * H), ins('bonnie', 'out', 'in', t0 - 5 * H), ins('bonnie', 'in', 'out', t0 - 4 * H), ins('ilford', 'in', 'out', t0 - 1 * H)].join(' '));
+  const ids = JSON.parse(sql("SELECT id, cat, status FROM events ORDER BY id"))[0].results;
+  const idOf = (cat, st, n = 0) => ids.filter((e) => e.cat === cat && e.status === st)[n].id;
+  const [oldIn, soonId, outId, inId, bOut] = [idOf('ilford', 'in', 0), idOf('ilford', 'soon'), idOf('ilford', 'out'), idOf('ilford', 'in', 1), idOf('bonnie', 'out')];
+  const near = (a, b, tol = 5000) => Math.abs(a - b) <= tol;
+  {
+    const r = await api('maxime', 'GET', '/api/times');
+    const rows = r.body.rows || [];
+    ok(r.status === 200 && rows.length === 2 && rows[0].id === inId && rows[1].id === outId, 'list: the two Rein/Raus events of the last 24 h, newest first (no soon, nothing older)');
+    ok(rows[0].editable && near(rows[0].lo, t0 - 10 * H) && near(rows[0].hi, t0, 8000), 'range of the newest event: from the "Raus" until now');
+    ok(near(rows[1].lo, t0 - 10.5 * H) && near(rows[1].hi, t0 - 1 * H), 'range of the "Raus": after the soon event, before the next "Rein"');
+    ok((await api('janin', 'GET', '/api/times')).status === 200, 'Janin as well');
+    for (const w of ['kathrin', 'linus', 'oskar', 'annalena']) ok((await api(w, 'GET', '/api/times')).status === 403 && (await api(w, 'POST', '/api/times', { id: inId, ts: t0 - 2 * H })).status === 403, `${w}: 403 on list and edit`);
+  }
+  {
+    const r = await api('maxime', 'POST', '/api/times', { id: inId, ts: t0 - 2 * H });
+    const row = (r.body.rows || []).find((x) => x.id === inId);
+    ok(r.status === 200 && row && row.ts === t0 - 2 * H && row.edited && row.edited.orig === t0 - 1 * H && row.edited.by === 'Maxime', 'last night\'s case: "Rein" moved back by one hour, original time and name kept');
+    ok(near(r.body.state.cats.ilford.since, t0 - 2 * H, 1), 'the status page shows the corrected time');
+    const r2 = await api('janin', 'POST', '/api/times', { id: inId, ts: t0 - 3 * H });
+    const row2 = (r2.body.rows || []).find((x) => x.id === inId);
+    ok(r2.status === 200 && row2.edited.orig === t0 - 1 * H && row2.edited.by === 'Janin', 'a second correction keeps the very first original time');
+    const db = JSON.parse(sql(`SELECT orig_ts, edited_by FROM events WHERE id = ${inId}`))[0].results[0];
+    ok(db.orig_ts === t0 - 1 * H && db.edited_by === 'janin', 'stored in the database');
+    ok((await api('maxime', 'POST', '/api/times', { id: inId, ts: t0 - 3 * H })).body.noop === true, 'the same time again: nothing to do');
+  }
+  {
+    const lo = (await api('maxime', 'GET', '/api/times')).body.rows.find((x) => x.id === inId);
+    const refuse = async (body, code, msg) => { const r = await api('maxime', 'POST', '/api/times', body); ok(r.status === (code === 'bad_request' || code === 'bad_ts' ? 400 : code === 'not_found' ? 404 : 409) && r.body.error === code, msg); return r; };
+    const r = await refuse({ id: inId, ts: t0 - 10 * H - min }, 'out_of_range', 'before the "Raus" event: refused');
+    ok(near(r.body.lo, t0 - 10 * H) && near(r.body.hi, t0, 8000), 'the refusal names the allowed range');
+    await refuse({ id: inId, ts: t0 + 10 * min }, 'out_of_range', 'in the future: refused');
+    await refuse({ id: outId, ts: t0 - 2 * H }, 'out_of_range', 'the "Raus" cannot jump behind the next "Rein"');
+    await refuse({ id: outId, ts: t0 - 10.6 * H }, 'out_of_range', 'nor before the announcement');
+    await refuse({ id: soonId, ts: t0 - 10.4 * H }, 'not_editable', 'a soon event is not editable');
+    await refuse({ id: oldIn, ts: t0 - 29 * H }, 'too_old', 'an event older than 24 h is not editable');
+    await refuse({ id: bOut, ts: t0 - 4.5 * H }, 'not_found', 'an event of the other cat looks like a missing one');
+    await refuse({ id: inId, ts: 'x' }, 'bad_ts', 'not a time');
+    await refuse({ ts: t0 - 2 * H }, 'bad_request', 'no id');
+    ok(lo.ts === t0 - 3 * H, 'refusals changed nothing');
+  }
+  {
+    sql(`INSERT INTO incident_notes (start_ts, note, updated_at) VALUES (${t0 - 10 * H}, 'Tür war offen', ${t0});`);
+    const r = await api('maxime', 'POST', '/api/times', { id: outId, ts: t0 - 9.5 * H });
+    ok(r.status === 200 && (r.body.rows.find((x) => x.id === outId) || {}).ts === t0 - 9.5 * H, '"Raus" moved later, between its neighbours');
+    const n = JSON.parse(sql("SELECT start_ts, note FROM incident_notes WHERE note = 'Tür war offen'"))[0].results;
+    ok(n.length === 1 && n[0].start_ts === t0 - 9.5 * H, 'the incident note moves with the event it hangs on');
+    sql("DELETE FROM incident_notes WHERE note = 'Tür war offen';");
+  }
+  {
+    // quick sheet: "Kam früher rein" may reach back a whole day (only for "in"); "out" stays at 4 h
+    sql('DELETE FROM events;');
+    sql([ins('ilford', 'in', null, t0 - 30 * H), ins('ilford', 'out', 'in', t0 - 10 * H)].join(' '));
+    const r = await api('maxime', 'POST', '/api/status', { to: 'in', agoMin: 300 });
+    const evs = JSON.parse(sql("SELECT status, ts FROM events WHERE cat = 'ilford' ORDER BY id"))[0].results;
+    ok(r.status === 200 && near(evs[2].ts, Date.now() - 300 * min, 15000), '"Kam rein" 5 hours ago is entered 5 hours ago');
+    sql('DELETE FROM events;');
+    sql([ins('ilford', 'in', null, t0 - 30 * H), ins('ilford', 'out', 'in', t0 - 10 * H)].join(' '));
+    await api('janin', 'POST', '/api/status', { to: 'in', agoMin: 5000 });
+    const e2 = JSON.parse(sql("SELECT ts FROM events WHERE cat = 'ilford' ORDER BY id"))[0].results;
+    ok(near(e2[2].ts, t0 - 10 * H, 1), 'far too long ago: never before the moment he went out');
+    sql('DELETE FROM events;');
+    sql(ins('ilford', 'in', null, t0 - 30 * H));
+    await api('maxime', 'POST', '/api/status', { to: 'out', agoMin: 600 });
+    const e3 = JSON.parse(sql("SELECT ts FROM events WHERE cat = 'ilford' ORDER BY id"))[0].results;
+    ok(near(e3[1].ts, Date.now() - 240 * min, 15000), 'backdating "Raus" is still capped at 4 hours');
+  }
+  await sleep(500); drain();
+  sql('DELETE FROM events;');
 } catch (e) {
   failed++; console.log('ERROR', e);
 }
