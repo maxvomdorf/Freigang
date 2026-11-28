@@ -8,8 +8,9 @@ Eine kleine installierbare Web-App für zwei Nachbarhaushalte mit demselben Prob
 - „In 15 Min“ warnt den Nachbarn, bevor die Tür aufgeht. Ist die andere Katze schon draußen, fragt die App vorher nach: warten und benachrichtigt werden, oder trotzdem raus (wird als Override festgehalten).
 - Ein Wochenplan mit Erinnerungen zeigt Überschneidungen, bevor sie passieren.
 - Die Admins (Maxime und Janin) bekommen ein Protokoll: Überschneidungen, Tagesbänder über 24 Stunden, eine Uhrzeiten-Heatmap, Notizen zu jedem Vorfall und CSV-Export.
+- Auf „Jetzt“ steht klein die aktuelle Temperatur. Ilfords Statistik legt Wetter und Zeit draußen nebeneinander (siehe „Wetter“).
 
-Die Oberfläche ist deutsch. Die App läuft auf Cloudflare (Worker, D1-Datenbank und ein Cron-Trigger), der kostenlose Tarif reicht. Kein Tracking, keine Anfragen an Dritte, die Schriften liegen selbst gehostet bei.
+Die Oberfläche ist deutsch. Die App läuft auf Cloudflare (Worker, D1-Datenbank und ein Cron-Trigger), der kostenlose Tarif reicht. Kein Tracking, die Handys schicken nichts an Dritte, die Schriften liegen selbst gehostet bei. Einzige Ausnahme: Hat ein Admin einen Standort eingerichtet, fragt der **Server** (nicht die Handys) bei [Open-Meteo](https://open-meteo.com) nach dem Wetter.
 
 ## Einrichten (einmalig, etwa 5 Minuten, am Computer)
 
@@ -104,11 +105,11 @@ Tipp: Schick jeden Link in einer privaten Nachricht. Wer den Link hat, kann die 
 
 | Ansicht | Was sie macht |
 | --- | --- |
-| Jetzt | Statusbanner, deine Katze mit dem großen Knopf und einem optionalen Hinweis („In Begleitung“, „Nur kurz draußen“ oder eigener Text bis 40 Zeichen), die andere Katze nur lesbar mit ihrem Hinweis, der Verlauf von heute (0 bis 24 Uhr) |
+| Jetzt | Statusbanner (neben dem Datum die aktuelle Temperatur; Tipp zeigt Wetterlage, gefühlt, Wind, Niederschlag), deine Katze mit dem großen Knopf und einem optionalen Hinweis („In Begleitung“, „Nur kurz draußen“ oder eigener Text bis 40 Zeichen), die andere Katze nur lesbar mit ihrem Hinweis, der Verlauf von heute (0 bis 24 Uhr) |
 | Plan | Draußen-Fenster pro Katze (wöchentlich, zu jeder Uhrzeit, auch über Mitternacht), Erinnerung 15 Min vorher, Hinweis bei Überschneidung. Dazu „Drinnen“-Einträge, ganztägig oder mit Uhrzeit, einmalig oder jede Woche: Ein einmaliger Eintrag, der den Beginn eines Draußen-Fensters abdeckt, lässt dieses Fenster an dem Tag entfallen (keine Erinnerung, durchgestrichen im Plan). Auf „Jetzt“ steht dann „Bleibt laut Plan … drinnen“ (nur Information, Rauslassen bleibt möglich) |
 | Füttern | Nur für Bonnies Haushalt (Kathrin, Linus, Oskar, Anna-Lena): Knopf „Bonnie füttern“ trägt Uhrzeit und Name ein, darunter die Liste der letzten 7 Tage nach Tagen. Wurde Bonnie in der letzten Stunde schon gefüttert, erscheint ein Hinweis, und es fragt vor dem Eintragen nach. Vergessene Fütterungen trägt man über „Früher gefüttert? Zeit anpassen“ nach (Schnellwahl oder genaue Uhrzeit, bis 24 Stunden zurück); sie stehen in der Liste mit „nachgetragen“. Den eigenen Eintrag kann man 10 Minuten lang mit „Rückgängig“ zurücknehmen, gezählt ab dem Moment des Eintragens. Ilfords Haushalt sieht diese Ansicht nie und bekommt nie eine Meldung dazu |
-| Protokoll | Nur für die Admins (Maxime, Janin): Kennzahlen, Tagesbänder, Heatmap, Vorfälle mit Notizen, CSV-Export, 7 oder 30 Tage. Oben umschalten auf **Ilford** (nur Ilfords Haushalt): „Ilford in Zahlen“ mit Vergleich zum Zeitraum davor, Tagesbalken mit Schnittlinie sowie Serien und Rekorde. Der Vergleich erscheint erst, wenn genug Verlauf da ist („Vergleich ab …“). Dritte Seite **Zeiten anpassen**: Rein- und Raus-Zeiten der letzten 24 Stunden nachträglich korrigieren (mit Spur der ursprünglichen Zeit) |
-| Einstellungen (oben rechts) | Benachrichtigungen an/aus, Testnachricht, Meldungen beim Rauslassen an/aus, Meldungen beim Füttern an/aus (nur Bonnies Haushalt), Abmelden |
+| Protokoll | Nur für die Admins (Maxime, Janin): Kennzahlen, Tagesbänder, Heatmap, Vorfälle mit Notizen, CSV-Export, 7 oder 30 Tage. Oben umschalten auf **Ilford** (nur Ilfords Haushalt): „Ilford in Zahlen“ mit Vergleich zum Zeitraum davor, Tagesbalken mit Schnittlinie sowie Serien und Rekorde. Der Vergleich erscheint erst, wenn genug Verlauf da ist („Vergleich ab …“). Dazu die Karte **Wetter & Freigang** (Zeit draußen nach Tagestemperatur und nach trocken/nass/Schnee, Korrelation ab 21 Tagen, „Tageswerte als CSV“). Dritte Seite **Zeiten anpassen**: Rein- und Raus-Zeiten der letzten 24 Stunden nachträglich korrigieren (mit Spur der ursprünglichen Zeit) |
+| Einstellungen (oben rechts) | Benachrichtigungen an/aus, Testnachricht, Meldungen beim Rauslassen an/aus, Meldungen beim Füttern an/aus (nur Bonnies Haushalt), Wetter-Standort (nur Admins), Abmelden |
 
 Wer Bonnie füttert, löst eine Nachricht an den Rest von Bonnies Haushalt aus („Bonnie wurde gefüttert – Linus um 08:12 Uhr“), außer bei denen, die „Meldungen beim Füttern“ ausgeschaltet haben. Bei einem Nachtrag steht „(nachgetragen)“ dabei. Nimmt jemand den Eintrag zurück, ersetzt eine Korrektur die Nachricht.
 
@@ -123,6 +124,20 @@ In `wrangler.jsonc` unter `vars` (das ist der eine Ort für eigene Änderungen; 
 | `TIMEZONE` | `Europe/Berlin` | Gilt für den Plan, die Tagesbänder und die Ruhezeiten |
 | `QUIET_START` / `QUIET_END` | `0` / `0` | Keine Ruhezeiten: Erinnerungen und Anstöße kommen auch nachts. Mit z. B. `22` / `6` schweigen sie in diesem Zeitraum (Statusmeldungen über die andere Katze werden nie unterdrückt). |
 | `STALE_HOURS` | `5` | „Noch draußen?“ nach so vielen Stunden, danach bei jedem Vielfachen erneut |
+
+## Wetter
+
+Das Wetter ist optional und lässt sich jederzeit einrichten. Solange kein Standort da ist, passiert nichts.
+
+1. App öffnen als Maxime oder Janin, **Einstellungen** (oben rechts), Abschnitt **Wetter**.
+2. **Meinen Standort übernehmen** antippen (das Handy fragt nach der Erlaubnis) oder Koordinaten eintippen, z. B. `52.40, 12.50`, dann **Koordinaten speichern**.
+3. Die App holt sofort das aktuelle Wetter und die Tage seit dem ersten Eintrag (höchstens 92 Tage zurück). Die Statuszeile nennt den Standort und den letzten Abruf. Fehlt etwas, hilft **Jetzt abrufen**; steht dort ein Fehler, ist der Dienst gerade nicht erreichbar, und der Cron versucht es alle 5 Minuten neu.
+
+Der Standort liegt nur in der Datenbank (nicht im Code), auf etwa 1 km gerundet. Quelle ist die Vorhersage-Schnittstelle von [Open-Meteo](https://open-meteo.com), ohne Schlüssel, kostenlos für nicht kommerzielle Nutzung (Daten CC BY 4.0; die Nennung steht in der App). Ohne weitere Angaben nimmt Open-Meteo in Deutschland das DWD-Modell ICON-D2 mit etwa 2 km Raster. Das sind **berechnete Werte, keine Messung** direkt am Haus, für Tagesmittel und Niederschlag reicht das. Abgerufen wird alle 30 Minuten, rund 50 Anfragen pro Tag.
+
+Gespeichert wird pro Stunde (Tabelle `weather_hours`): Temperatur, gefühlte Temperatur, Luftfeuchte, Niederschlag, Schnee, Bewölkung, Wind, Böen, Sonne und Wettercode. Niederschlag, Schnee und Sonne sind Summen der **vorangegangenen** Stunde; die Tageswerte rechnen das auf die lokale Tagesgrenze um.
+
+Auswertung (Protokoll, Seite „Ilford“): Es zählen nur abgeschlossene, ganz erfasste Tage mit lückenlosem Wetter und ohne unsicheren Ausflug. Gruppen (Temperaturband, trocken/nass/Schnee) zeigen Zahlen ab 3 Tagen. Die Rangkorrelation (Spearman) zwischen Tagesmittel und Zeit draußen erscheint ab 21 Tagen mit mindestens 8 °C Spielraum. Sie zeigt ein Muster, keine Ursache: Jahreszeit, Tageslicht und Wochentag spielen mit. Wer selbst rechnen will, nimmt „Tageswerte als CSV“ (Ilford-Seite) oder den Ereignis-Export mit den Wetterspalten.
 
 ## Handy verloren, Link weitergegeben, neues Gerät
 
@@ -156,20 +171,20 @@ npm run dev              # http://localhost:8787
 npm test                 # in einem zweiten Terminal, während "npm run dev" läuft
 ```
 
-Der Test spricht mit dem laufenden Worker und spielt alle Personen: Anmeldung, Statuswechsel, die Konfliktsperre auf dem Server, Warten, Rückdatieren, den Wochenplan, Admin-only-Routen, die Protokoll-Rechnung, alle Cron-Anstöße und Web Push. Push-Nachrichten fängt ein Mock-Pushdienst ab, der sie wie ein Browser entschlüsselt (RFC 8291) und die VAPID-Signatur prüft. Verschlüsselung und Header werden also gegen den Standard geprüft und nicht gegen den eigenen Code.
+Der Test spricht mit dem laufenden Worker und spielt alle Personen: Anmeldung, Statuswechsel, die Konfliktsperre auf dem Server, Warten, Rückdatieren, den Wochenplan, Admin-only-Routen, die Protokoll-Rechnung, alle Cron-Anstöße und Web Push. Der Wetterabruf läuft im Test gegen einen Mock-Wetterdienst (`WEATHER_API` in `.dev.vars`, von `npm run setup:local` gesetzt; fehlt die Zeile, werden diese Tests übersprungen). Push-Nachrichten fängt ein Mock-Pushdienst ab, der sie wie ein Browser entschlüsselt (RFC 8291) und die VAPID-Signatur prüft. Verschlüsselung und Header werden also gegen den Standard geprüft und nicht gegen den eigenen Code.
 
-**Von keinem Test hier abgedeckt:** die echte Zustellung über die Push-Dienste von Apple und Google. Prüf sie einmal auf den echten Handys mit Einstellungen, „Testnachricht“.
+**Von keinem Test hier abgedeckt:** die echte Zustellung über die Push-Dienste von Apple und Google (prüf sie einmal auf den echten Handys mit Einstellungen, „Testnachricht“) und die echte Antwort von Open-Meteo (prüf sie einmal mit Einstellungen, Wetter, „Jetzt abrufen“; die Statuszeile zeigt, ob es geklappt hat).
 
 ## Grenzen des kostenlosen Tarifs
 
-- 100.000 Anfragen pro Tag. Eine geöffnete App fragt alle 15 Sekunden nach Neuigkeiten; zwei Handys, die den ganzen Tag benutzt werden, bleiben weit darunter. Der Cron-Trigger fügt 1.440 pro Tag hinzu.
+- 100.000 Anfragen pro Tag. Eine geöffnete App fragt alle 15 Sekunden nach Neuigkeiten; zwei Handys, die den ganzen Tag benutzt werden, bleiben weit darunter. Der Cron-Trigger fügt 1.440 pro Tag hinzu. Der Wetterabruf ist eine ausgehende Anfrage und zählt nicht dazu.
 - Kostenlose Workers bekommen 10 ms CPU pro Anfrage. Eine Push-Nachricht zu verschlüsseln und zu signieren braucht davon nur einen Bruchteil. Zeigen die Logs aber einmal „exceeded CPU“-Fehler, hebt der Tarif Workers Paid (etwa 5 USD im Monat) die Grenze auf.
 - Das kostenlose Kontingent von Cloudflare D1 ist weit größer, als diese App braucht: ein paar Dutzend geschriebene Zeilen pro Tag, und jede Abfrage liest nur eine Handvoll Zeilen über Indizes (Migration `0002_indexes.sql`).
 
 ## Aufbau
 
 ```
-src/        Worker: api.js (Routen, Statusregeln), slots.js (Plan-Rechnung), feeding.js (Fütterungstracker), cron.js (Erinnerungen), push.js + webpush.js (Web Push), stats.js (Protokoll-Rechnung), ilford.js (Ilford in Zahlen), times.js (Regeln fürs Anpassen von Zeiten)
+src/        Worker: api.js (Routen, Statusregeln), slots.js (Plan-Rechnung), feeding.js (Fütterungstracker), cron.js (Erinnerungen), push.js + webpush.js (Web Push), stats.js (Protokoll-Rechnung), ilford.js (Ilford in Zahlen), times.js (Regeln fürs Anpassen von Zeiten), weather.js (Wetter: Abruf-Format, Tageswerte, Korrelation) + weatherjob.js (Abruf per Cron, Standort)
 public/     Die App: index.html, app.js, style.css, sw.js (offline + Push), Manifest, Icons, Katzenbilder, Schriften
 migrations/ Datenbankschema
 scripts/    setup, links, keys, deploy

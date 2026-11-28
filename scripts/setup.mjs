@@ -39,7 +39,7 @@ if (flag('local')) {
     writeFileSync(p, [
       ...Object.values(PEOPLE_INFO).map((x) => `${x.secretName}=${generateCode()}`),
       `VAPID_PUBLIC_KEY=${v.publicKey}`, `VAPID_PRIVATE_JWK=${JSON.stringify(v.privateJWK)}`,
-      'VAPID_SUBJECT=mailto:test@freigang.test', 'PUSH_TEST_URL=http://127.0.0.1:9911', '',
+      'VAPID_SUBJECT=mailto:test@freigang.test', 'PUSH_TEST_URL=http://127.0.0.1:9911', 'WEATHER_API=http://127.0.0.1:9912/v1/forecast', '',
     ].join('\n'), { mode: 0o600 });
     say('  Created .dev.vars (test-only codes, never deployed).');
   }

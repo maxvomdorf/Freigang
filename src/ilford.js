@@ -15,6 +15,7 @@
 //   once it has an outing. A today without an outing yet neither extends nor breaks a streak.
 import { zoned, localToUtc, MIN, HOUR } from './util.js';
 import { addDays, daysBetween } from './slots.js';
+import { dayWeather, weatherGroups } from './weather.js';
 
 const DAY = 24 * HOUR;
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -125,8 +126,14 @@ function runs(flags, dates) {
  * @param days    7 or 30: length of the totals window and the number of bars
  * @param tz      IANA time zone
  * @param staleMs outings longer than this are "unsicher"
+ * @param wx      optional hourly weather rows (src/weather.js), sorted by ts: adds the weather to the bars and the "Wetter" block
+ * @param withDaily  also return one row per day since the first event (for the CSV)
+ *
+ * Weather and activity: only DECIDED days count (not today, not the first partly known day), without a doubtful outing
+ * ("unsicher" or still open: the real time outside is unknown), and with a complete weather day. Days are grouped by their mean
+ * temperature and by dry/wet/snow; a correlation (Spearman) appears only with enough days and enough spread (src/weather.js).
  */
-export function ilfordStats({ events, now, days, tz, staleMs }) {
+export function ilfordStats({ events, now, days, tz, staleMs, wx = null, withDaily = false }) {
   const sorted = [...events].filter((e) => e.ts <= now).sort((a, b) => a.ts - b.ts || a.id - b.id);
   const base = { now, days, staleHours: +(staleMs / HOUR).toFixed(1) };
   if (!sorted.length) return { ...base, empty: true };
@@ -178,6 +185,10 @@ export function ilfordStats({ events, now, days, tz, staleMs }) {
     g.full = !g.partial && !g.first;
   });
 
+  // ---- weather per day (only when hourly rows exist) ----
+  const wxd = wx && wx.length ? grid.map((g) => dayWeather(wx, g.a, g.b)) : null;
+  const wxBrief = (w) => (w ? { tmin: w.tmin, tmax: w.tmax, tmean: w.tmean, precip: w.precip, kind: w.kind, complete: w.complete } : null);
+
   // ---- bars, average line, rolling 7-day average ----
   const shown = grid.slice(-days);
   const fullDays = shown.filter((g) => g.full);
@@ -189,10 +200,31 @@ export function ilfordStats({ events, now, days, tz, staleMs }) {
     for (let q = i - 6; q <= i; q++) { if (!grid[q].full) return null; sum += grid[q].minutes; }
     return Math.round(sum / 7);
   });
-  const bars = shown.map((g) => ({
+  const bars = shown.map((g, j) => ({
     iso: g.iso, d: WD[wdOf(g.iso)], date: label(g.iso), minutes: g.minutes, outings: g.starts,
     partial: g.partial, first: g.first,
+    ...(wxd ? { wx: wxBrief(wxd[grid.length - shown.length + j]) } : {}),
   }));
+
+  // ---- weather and activity ----
+  let weather = { has: false };
+  if (wxd) {
+    const counted = [], doubtful = [];
+    grid.forEach((g, i) => {
+      const w = wxd[i];
+      if (!g.full || !w || !w.complete) return;
+      if (g.ms !== g.sureMs) doubtful.push(g); else counted.push({ minutes: g.minutes, outings: g.starts, w });
+    });
+    const firstWx = zoned(wx[0].ts, tz).date;
+    weather = { has: true, since: { iso: firstWx, label: label(firstWx) }, days: counted.length, skipped: doubtful.length, ...weatherGroups(counted) };
+  }
+
+  // ---- one row per day since the first event (CSV) ----
+  const daily = withDaily ? grid.map((g, i) => ({
+    iso: g.iso, wd: WD[wdOf(g.iso)], minutes: g.minutes, outings: g.starts,
+    unsure: g.ms !== g.sureMs, partial: g.partial, first: g.first,
+    wx: wxd?.[i] ?? null,
+  })) : null;
 
   // ---- streaks (whole history) ----
   const decided = grid.filter((g) => !g.partial || g.minutes > 0);
@@ -233,5 +265,7 @@ export function ilfordStats({ events, now, days, tz, staleMs }) {
     prevFrom: comparable ? null : label(zoned(known + 2 * span, tz).date),
     bars, avg, rolling,
     streaks, records,
+    weather,
+    ...(daily ? { daily } : {}),
   };
 }

@@ -293,3 +293,11 @@ textarea.input { height: 110px; padding: 12px 16px; resize: none; line-height: 1
 
 /* ---- Protokoll > Zeiten anpassen ---- */
 .recs .rec .btn { width: auto; flex: none; min-height: 44px; padding: 0 16px; font-size: 14px; }
+
+/* weather: a small icon and the temperature after the date, and the details sheet */
+.wx-chip { display: inline-flex; align-items: center; gap: 4px; padding: 10px 6px; margin: -10px 0 -10px -2px; border: 0; border-radius: 12px; background: transparent; color: inherit; font: inherit; vertical-align: baseline; }
+.wx-chip svg { flex: none; opacity: .85; }
+.wx-chip:active { background: var(--line2); }
+.kvs { display: flex; flex-direction: column; }
+.kvs > div { display: flex; justify-content: space-between; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line2); font-size: 15px; }
+.kvs > div span { color: var(--muted); }

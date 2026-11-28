@@ -7,6 +7,8 @@ import { notifyUser, notifyUsers } from './push.js';
 import { buildLog, todayStrip } from './stats.js';
 import { ilfordStats } from './ilford.js';
 import { checkEdit, editBounds, lockedReason } from './times.js';
+import { describe, parseCoords, validCoords } from './weather.js';
+import { KV_SQL, readWx, runWeather, setLocation, wxState } from './weatherjob.js';
 import { lastEvents, eventsSince } from './db.js';
 import { normalize, overlapsWeek, nextDate, addDays, daysBetween, insideAt, DAY_MIN } from './slots.js';
 import { VERSION } from './version.js';
@@ -51,11 +53,12 @@ async function buildState(env, me, now) {
   const dayFrom = localToUtc(z.year, z.month, z.day, 0, 0, tz);
   const ev = await eventsSince(env, dayFrom);
   const theirs = peopleOfCat(otherCat(me.cat));
-  const [watch, devices, prefs, inside] = await env.DB.batch([
+  const [watch, devices, prefs, inside, wxRows] = await env.DB.batch([
     env.DB.prepare('SELECT 1 FROM watches WHERE user = ? AND cat = ?').bind(me.user, otherCat(me.cat)),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM push_subscriptions WHERE user IN (${theirs.map(() => '?').join(',')})`).bind(...theirs),
     env.DB.prepare('SELECT own_push, feed_push FROM user_prefs WHERE user = ?').bind(me.user),
     env.DB.prepare("SELECT cat, weekday, start_min, end_min, on_date FROM schedule_slots WHERE kind = 'in'"),
+    env.DB.prepare(KV_SQL),
   ]);
   // Is a cat planned to stay inside right now? (the plan's "Drinnen" entries; until = minutes after today's midnight)
   const insideNow = {};
@@ -73,6 +76,7 @@ async function buildState(env, me, now) {
     prefs: { ownPush: (prefs.results[0]?.own_push ?? 1) === 1, ...(feeds ? { feedPush: (prefs.results[0]?.feed_push ?? 1) === 1 } : {}) },
     ...(feeds ? { feeding: { last: lastFeed ? feedingOut(lastFeed, me, now) : null, hintMin: FEED_HINT_MIN, undoMin: FEED_UNDO_MIN } } : {}),
     cats: { ilford: catState(last.ilford), bonnie: catState(last.bonnie) },
+    ...wxState(wxRows.results, now, me.admin),
     insideNow,
     waiting: watch.results.length > 0,
     today: todayStrip({ events: ev, now, tz }),
@@ -326,7 +330,14 @@ async function logRoutes(request, env, me, url, now) {
   const from = now - days * 24 * HOUR;
   const events = await eventsSince(env, from);
   if (url.pathname === '/api/export') {
-    return json({ events: events.filter((e) => e.ts >= from), tz: tzOf(env) });
+    // the weather at the time of each event: the nearest full hour (then the one before it), if there is a reading
+    const { results: hours } = await env.DB.prepare('SELECT ts, temp, feels, code FROM weather_hours WHERE ts >= ? AND ts <= ?').bind(from - HOUR, now).all();
+    const byHour = new Map(hours.map((h) => [h.ts, h]));
+    const wxAt = (ts) => {
+      const h = byHour.get(Math.round(ts / HOUR) * HOUR) ?? byHour.get(Math.floor(ts / HOUR) * HOUR);
+      return h && h.temp !== null ? { temp: h.temp, feels: h.feels, text: describe(h.code, 1)?.text ?? '' } : null;
+    };
+    return json({ events: events.filter((e) => e.ts >= from).map((e) => ({ ...e, wx: wxAt(e.ts) })), tz: tzOf(env) });
   }
   const { results: notes } = await env.DB.prepare('SELECT start_ts, note FROM incident_notes WHERE start_ts >= ?').bind(from).all();
   return json(buildLog({ events, notes, now, days, tz: tzOf(env) }));
@@ -422,12 +433,36 @@ export async function handleApi(request, env, ctx) {
       if (m === 'GET' || m === 'POST') return timesRoute(request, env, me, now);
     }
 
+    // Weather: the location (rounded to about 1 km) is set by an admin and lives only in the database, never in the code.
+    if (path === '/api/weather/location' && m === 'PUT') {
+      if (!me.admin) return json({ error: 'forbidden' }, 403);
+      const b = await request.json().catch(() => ({}));
+      const c = b.text != null ? parseCoords(b.text) : validCoords(b.lat, b.lon);
+      if (!c) return json({ error: 'bad_location' }, 400);
+      await setLocation(env, c, now);
+      const fetched = await runWeather(env, Date.now(), { force: true });
+      return json({ ok: true, fetched, state: await buildState(env, me, Date.now()) });
+    }
+    if (path === '/api/weather/refresh' && m === 'POST') {
+      if (!me.admin) return json({ error: 'forbidden' }, 403);
+      const { config, status } = await readWx(env);
+      if (!config) return json({ error: 'no_location' }, 409);
+      if (status.tried && now - status.tried < 20000) return json({ error: 'too_soon' }, 429);
+      const fetched = await runWeather(env, now, { force: true });
+      return json({ ok: true, fetched, state: await buildState(env, me, Date.now()) });
+    }
+
     // "Ilford in Zahlen": only Ilford's household may see these numbers (nothing is sent to anyone else).
-    if (path === '/api/ilford' && m === 'GET') {
+    if ((path === '/api/ilford' || path === '/api/ilford/daily') && m === 'GET') {
       if (me.cat !== 'ilford') return json({ error: 'forbidden' }, 403);
       const days = url.searchParams.get('days') === '30' ? 30 : 7;
-      const { results } = await env.DB.prepare("SELECT id, ts, status FROM events WHERE cat = 'ilford' ORDER BY ts, id").all();
-      return json(ilfordStats({ events: results, now, days, tz: tzOf(env), staleMs: staleMsOf(env) }));
+      const [events, wx] = await Promise.all([
+        env.DB.prepare("SELECT id, ts, status FROM events WHERE cat = 'ilford' ORDER BY ts, id").all(),
+        // only the columns the day aggregation reads: fewer bytes to deserialize on the 10 ms CPU budget (a year is ~8,800 rows)
+        env.DB.prepare('SELECT ts, temp, precip, snow, wind, gust, sun FROM weather_hours ORDER BY ts').all(),
+      ]);
+      const stats = ilfordStats({ events: events.results, now, days, tz: tzOf(env), staleMs: staleMsOf(env), wx: wx.results, withDaily: path === '/api/ilford/daily' });
+      return json(path === '/api/ilford/daily' ? { daily: stats.daily ?? [], staleHours: stats.staleHours ?? null } : stats);
     }
 
     if (path === '/api/log' || path === '/api/export' || path === '/api/note') {

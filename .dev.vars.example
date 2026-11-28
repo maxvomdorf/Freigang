@@ -10,3 +10,5 @@ VAPID_PRIVATE_JWK=
 VAPID_SUBJECT=mailto:test@freigang.test
 # Lets test/run.mjs catch outgoing pushes in a mock push service.
 PUSH_TEST_URL=http://127.0.0.1:9911
+# Lets test/run.mjs answer the weather requests itself (mock). Never set this in the real deployment: without it the app asks api.open-meteo.com.
+WEATHER_API=http://127.0.0.1:9912/v1/forecast

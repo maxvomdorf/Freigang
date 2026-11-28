@@ -51,6 +51,30 @@ const srv = http.createServer((req, res) => {
   });
 }).listen(9911);
 
+// ---- mock weather service (Open-Meteo shape). The worker reaches it through WEATHER_API in .dev.vars (npm run setup:local writes it). ----
+const WX_URL = 'http://127.0.0.1:9912/v1/forecast';
+const wxMock = { mode: 'ok', hits: 0, last: '' };
+const wxSrv = http.createServer((req, res) => {
+  wxMock.hits++; wxMock.last = req.url;
+  const u = new URL(req.url, 'http://x');
+  if (wxMock.mode === '500') { res.statusCode = 500; return res.end('boom'); }
+  if (wxMock.mode === 'garbage') { res.setHeader('content-type', 'text/html'); return res.end('<html>not json'); }
+  res.setHeader('content-type', 'application/json');
+  if (wxMock.mode === 'error') return res.end(JSON.stringify({ error: true, reason: 'Latitude must be in range of -90 to 90°.' }));
+  const past = +u.searchParams.get('past_days') || 1, cur = Math.floor(Date.now() / 3600000) * 3600;
+  const time = []; for (let t = cur - past * 86400; t <= cur + 12 * 3600; t += 3600) time.push(t);
+  const col = (f) => time.map((t, i) => f(t, i));
+  res.end(JSON.stringify({
+    latitude: +u.searchParams.get('latitude'), longitude: +u.searchParams.get('longitude'), timezone: 'GMT', utc_offset_seconds: 0,
+    current: { time: cur, interval: 900, temperature_2m: 3.4, apparent_temperature: 0.9, weather_code: 3, is_day: 1, wind_speed_10m: 12.6, precipitation: 0 },
+    hourly: {
+      time, temperature_2m: col((t) => 2 + 4 * Math.sin(t / 43200)), apparent_temperature: col(() => 1), relative_humidity_2m: col(() => 85),
+      precipitation: col((t, i) => (i % 7 === 0 ? 0.4 : 0)), snowfall: col(() => 0), weather_code: col(() => 3), cloud_cover: col(() => 90),
+      wind_speed_10m: col(() => 11), wind_gusts_10m: col(() => 24), sunshine_duration: col(() => 0),
+    },
+  }));
+}).listen(9912);
+
 const take = (user) => { const r = received.filter((x) => x.user === user); received.length = 0; received.push(...received.filter((x) => x.user !== user)); return r; };
 const drain = () => { const r = [...received]; received.length = 0; return r; };
 
@@ -608,9 +632,138 @@ try {
   }
   await sleep(500); drain();
   sql('DELETE FROM events;');
+
+  console.log('Wetter (Standort nur in der Datenbank, Abruf per Cron, Anzeige für alle)');
+  const mockOn = vars.WEATHER_API === WX_URL;
+  if (!mockOn) console.log('  skip  the fetch tests (no WEATHER_API in .dev.vars: run "npm run setup:local" on a fresh .dev.vars, or add WEATHER_API=' + WX_URL + ')');
+  const wxReset = () => sql("DELETE FROM kv; DELETE FROM weather_hours; DELETE FROM sent_keys WHERE key LIKE 'wx:%';");
+  const kvOf = (k) => { const r = JSON.parse(sql(`SELECT value FROM kv WHERE key = '${k}'`))[0].results; return r.length ? JSON.parse(r[0].value) : null; };
+  const wxCount = () => JSON.parse(sql('SELECT COUNT(*) AS n FROM weather_hours'))[0].results[0].n;
+  const everyone = Object.keys(TOK), admins = ['maxime', 'janin'], others = ['kathrin', 'linus', 'oskar', 'annalena'];
+  const hourNow = Math.floor(nowMs() / H) * H;
+  const seed = (days) => sql(`WITH RECURSIVE h(ts) AS (SELECT ${hourNow - days * 24 * H} UNION ALL SELECT ts + 3600000 FROM h WHERE ts < ${hourNow}) INSERT INTO weather_hours (ts, temp, feels, hum, precip, snow, code, cloud, wind, gust, sun) SELECT ts, CASE WHEN ((ts / 86400000) % 2) = 0 THEN 1.0 ELSE 6.0 END, 0.5, 80, 0, 0, 3, 90, 10, 20, 0 FROM h;`);
+  const setNow = (ts, temp = 2.6) => sql(`INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES ('wx_now', '{"ts":${ts},"temp":${temp},"feels":0.4,"code":73,"isDay":1,"wind":9,"precip":0.2}', ${nowMs()});`);
+  wxReset(); sql('DELETE FROM events;');
+  {
+    const bad = [];
+    for (const w of everyone) {
+      const st = (await api(w, 'GET', '/api/state')).body, admin = admins.includes(w);
+      if (st.weather !== null) bad.push(w + ': shows weather');
+      if (admin !== ('weatherCfg' in st)) bad.push(w + ': set-up block visibility');
+      if (admin && st.weatherCfg.configured !== false) bad.push(w + ': configured');
+    }
+    ok(!bad.length, 'nothing is shown before a location is set; only admins get the set-up block ' + bad.join(', '));
+  }
+  for (const w of others) {
+    ok((await api(w, 'PUT', '/api/weather/location', { lat: 52.4, lon: 12.5 })).status === 403 && (await api(w, 'POST', '/api/weather/refresh')).status === 403, `${w} may not set the location or fetch`);
+  }
+  {
+    const bads = [{ lat: 999, lon: 12 }, { lat: 52, lon: 181 }, { lat: '52', lon: '12' }, { text: 'abc' }, { text: '1 2 3' }, {}, { lat: null, lon: null }];
+    const codes = []; for (const b of bads) codes.push((await api('maxime', 'PUT', '/api/weather/location', b)).status);
+    ok(codes.every((c) => c === 400) && kvOf('wx_config') === null, 'nonsense is refused and nothing is stored: ' + codes.join());
+    ok((await api('maxime', 'POST', '/api/weather/refresh')).status === 409, 'fetching without a location: 409');
+  }
+  const firstTs = nowMs() - 6 * 24 * H;
+  sql(ins('ilford', 'in', null, firstTs) + ins('ilford', 'out', 'in', nowMs() - 3 * 24 * H) + ins('ilford', 'in', 'out', nowMs() - 3 * 24 * H + 60 * min) + ins('ilford', 'out', 'in', nowMs() - 2 * 24 * H) + ins('ilford', 'in', 'out', nowMs() - 2 * 24 * H + 150 * min));
+  wxMock.mode = 'ok'; wxMock.hits = 0;
+  {
+    const r = await api('maxime', 'PUT', '/api/weather/location', { lat: 52.4012, lon: 12.5034 });
+    const cfg = r.body?.state?.weatherCfg;
+    ok(r.status === 200 && cfg.configured && cfg.lat === 52.4 && cfg.lon === 12.5, 'Maxime sets the location; it is rounded to 2 decimals (about 1 km)');
+    ok(JSON.stringify(kvOf('wx_config')) === '{"lat":52.4,"lon":12.5}', 'only the rounded location is stored (never the exact one)');
+    if (mockOn) {
+      ok(r.body.fetched.ok === true && r.body.fetched.rows > 100 && wxMock.hits === 1, 'the first fetch comes at once, with the history');
+      const q = new URL(wxMock.last, 'http://x').searchParams;
+      ok(q.get('latitude') === '52.4' && q.get('longitude') === '12.5' && q.get('timeformat') === 'unixtime' && q.get('forecast_days') === '1', 'the request carries the rounded location and unix times');
+      ok([7, 8].includes(+q.get('past_days')), 'the history reaches back to the first event (6 days ago): past_days ' + q.get('past_days'));
+      ok(wxCount() > 100, 'the hours are in the database');
+      const bad = []; for (const w of everyone) { const st = (await api(w, 'GET', '/api/state')).body.weather; if (!st || st.temp !== 3.4 || st.text !== 'Bedeckt' || st.icon !== 'cloud') bad.push(w); }
+      ok(!bad.length, 'everybody sees the current weather (3.4°, Bedeckt) ' + bad.join(', '));
+      const st = kvOf('wx_status');
+      ok(st.ok > 0 && st.err === null && st.backfilled === true && cfg.ok > 0, 'the status says: fetched, no error, history done');
+    } else ok(typeof r.body.fetched === 'object', 'the first fetch is attempted');
+  }
+
+  // from here on the data is seeded, so the checks do not depend on any network
+  sql('DELETE FROM weather_hours;'); seed(8);
+  setNow(hourNow);
+  {
+    const bad = []; for (const w of everyone) { const st = (await api(w, 'GET', '/api/state')).body.weather; if (!st || st.temp !== 2.6 || st.text !== 'Schneefall' || st.icon !== 'snow' || st.wind !== 9) bad.push(w); }
+    ok(!bad.length, 'the current reading is in everybody\'s state: 2.6°, Schneefall ' + bad.join(', '));
+    setNow(nowMs() - 3 * H);
+    const old = []; for (const w of everyone) if ((await api(w, 'GET', '/api/state')).body.weather !== null) old.push(w);
+    ok(!old.length, 'a reading older than 2 hours is hidden, not shown as current ' + old.join(', '));
+    ok((await api('maxime', 'GET', '/api/state')).body.weatherCfg.configured === true, 'the set-up block stays for admins');
+  }
+  for (const w of admins) {
+    const r = await api(w, 'GET', '/api/ilford?days=7');
+    const W = r.body.weather;
+    ok(r.status === 200 && W.has && W.days >= 4 && W.days <= 6 && W.skipped === 0, `${w}: the Ilford numbers have a weather block over the decided days (${W && W.days})`);
+    ok(W.bands.reduce((n, b) => n + b.days, 0) === W.days && W.kinds.find((k) => k.id === 'dry').days === W.days && W.corr === null && W.need.minDays === 21, `${w}: bands add up, all days dry, no correlation yet`);
+    ok(r.body.bars.length === 7 && r.body.bars.every((b) => b.wx && typeof b.wx.tmean === 'number'), `${w}: every bar carries its day's weather`);
+    const d = await api(w, 'GET', '/api/ilford/daily');
+    ok(d.status === 200 && d.body.daily.length >= 6 && d.body.daily.at(-1).partial && d.body.daily.every((x) => x.wx), `${w}: daily rows with weather for the CSV`);
+  }
+  for (const w of others) {
+    const a1 = await api(w, 'GET', '/api/ilford/daily');
+    ok(a1.status === 403 && JSON.stringify(a1.body) === '{"error":"forbidden"}', `${w}: no daily rows`);
+  }
+  ok((await api('maxime', 'POST', '/api/ilford/daily')).status === 404, 'daily rows are read-only');
+  {
+    const r = await api('maxime', 'GET', '/api/export?days=7');
+    const withWx = r.body.events.filter((e) => e.wx);
+    ok(r.status === 200 && withWx.length === r.body.events.length && withWx.every((e) => typeof e.wx.temp === 'number' && e.wx.text === 'Bedeckt'), 'the export has the weather at the time of every event');
+    ok((await api('kathrin', 'GET', '/api/export?days=7')).status === 403, 'the export stays admin-only');
+  }
+
+  if (mockOn) {
+    const age = (extra = '') => sql(`UPDATE kv SET value = json_set(value, '$.tried', 0${extra}) WHERE key = 'wx_status';`);
+    const cron = async () => { sql("DELETE FROM sent_keys WHERE key LIKE 'wx:%';"); const c = (await fetch(BASE + '/__scheduled?cron=*+*+*+*+*')).status; await sleep(1500); return c; };
+    setNow(hourNow);
+    wxMock.mode = '500'; age();
+    {
+      const r = await api('maxime', 'POST', '/api/weather/refresh');
+      ok(r.status === 200 && r.body.fetched.ok === false && r.body.fetched.error === 'http_500' && r.body.state.weatherCfg.err === 'http_500', 'a server error is recorded as http_500');
+      ok(r.body.state.weather && r.body.state.weather.temp === 2.6 && wxCount() > 100, 'the failure leaves the data and the display as they were');
+      ok((await api('janin', 'POST', '/api/weather/refresh')).status === 429, 'a second tap right away: too soon (20 s)');
+    }
+    wxMock.mode = 'garbage'; age();
+    ok((await api('janin', 'POST', '/api/weather/refresh')).body.fetched.error === 'bad_response', 'an answer that is not JSON: bad_response');
+    wxMock.mode = 'error'; age();
+    ok((await api('maxime', 'POST', '/api/weather/refresh')).body.fetched.error === 'api', 'an error answer from the API: api');
+    wxMock.mode = 'ok'; age();
+    {
+      const hits = wxMock.hits;
+      const r = await api('maxime', 'POST', '/api/weather/refresh');
+      const q = new URL(wxMock.last, 'http://x').searchParams;
+      ok(r.body.fetched.ok === true && r.body.state.weatherCfg.err === null && r.body.state.weather.temp === 3.4 && wxMock.hits === hits + 1, 'the next good fetch clears the error and updates the reading');
+      ok(q.get('past_days') === '2', 'after the first fetch only the last two days are asked for');
+    }
+    // the cron: not due → nothing; due → fetch; after a failure it waits
+    {
+      let hits = wxMock.hits;
+      ok((await cron()) === 200 && wxMock.hits === hits, 'the cron does nothing while the reading is fresh');
+      age(", '$.ok', 0"); hits = wxMock.hits;
+      ok((await cron()) === 200 && wxMock.hits === hits + 1 && kvOf('wx_status').ok > 0, 'the cron fetches when it is due');
+      wxMock.mode = '500'; age(", '$.ok', 0"); hits = wxMock.hits;
+      ok((await cron()) === 200 && wxMock.hits === hits + 1 && kvOf('wx_status').err === 'http_500', 'a failing API does not break the cron; the error is recorded');
+      ok((await cron()) === 200 && wxMock.hits === hits + 1, 'and it waits 5 minutes before the next try');
+      wxMock.mode = 'ok';
+    }
+    // moving the location
+    {
+      sql('INSERT INTO weather_hours (ts, temp) VALUES (3600000, 9);');
+      await api('maxime', 'PUT', '/api/weather/location', { text: '52,45 12,5' });
+      ok(JSON.parse(sql('SELECT COUNT(*) AS n FROM weather_hours WHERE ts = 3600000'))[0].results[0].n === 1 && JSON.stringify(kvOf('wx_config')) === '{"lat":52.45,"lon":12.5}', 'a small move keeps the stored hours');
+      await api('janin', 'PUT', '/api/weather/location', { lat: 48.14, lon: 11.58 });
+      ok(JSON.parse(sql('SELECT COUNT(*) AS n FROM weather_hours WHERE ts = 3600000'))[0].results[0].n === 0 && wxCount() > 100, 'a move to another city drops the old hours and fetches the new place');
+    }
+  }
+  wxReset(); sql('DELETE FROM events;');
+  await sleep(300); drain();
 } catch (e) {
   failed++; console.log('ERROR', e);
 }
-srv.close();
+srv.close(); wxSrv.close();
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

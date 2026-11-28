@@ -1,6 +1,6 @@
 // Freigang – client. Plain ES module, no build step. Everything the person sees is German.
 const CATS = { ilford: { name: 'Ilford', gen: 'Ilfords' }, bonnie: { name: 'Bonnie', gen: 'Bonnies' } };
-const VERSION = '1.9.0'; // same as src/version.js; a newer server version makes the app reload itself once
+const VERSION = '1.10.0'; // same as src/version.js; a newer server version makes the app reload itself once
 const NOTES = ['In Begleitung', 'Nur kurz draußen'], NOTE_MAX = 40; // quick notes on a cat's status; the server caps custom text at 40
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -28,6 +28,18 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   share: '<path d="M12 15V4M8.5 7.5L12 4l3.5 3.5"/><path d="M7 11H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  pin: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>',
+  // weather (the icon names come from the server: src/weather.js)
+  wsun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+  wmoon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  wcloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  wpartly: '<path d="M12 2v2M4.93 4.93l1.41 1.41M20 12h2M19.07 4.93l-1.41 1.41"/><path d="M15.95 12.65a4 4 0 0 0-5.93-4.13"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
+  wpartlynight: '<path d="M10.19 8.5A6 6 0 0 1 16 4a1 1 0 0 0 6 6 6 6 0 0 1-3 5.2"/><path d="M13 16a3 3 0 1 1 0 6H7a5 5 0 1 1 4.9-6Z"/>',
+  wfog: '<path d="M4 14.9A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.24"/><path d="M16 17H7M17 21H9"/>',
+  wdrizzle: '<path d="M4 14.9A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.24"/><path d="M8 19v1M8 14v1M16 19v1M16 14v1M12 21v1M12 16v1"/>',
+  wrain: '<path d="M4 14.9A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.24"/><path d="M16 14v6M8 14v6M12 16v6"/>',
+  wsnow: '<path d="M4 14.9A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.24"/><path d="M8 15h.01M8 19h.01M12 17h.01M12 21h.01M16 15h.01M16 19h.01"/>',
+  wstorm: '<path d="M6 16.33A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.97"/><path d="m13 12-3 5h4l-3 5"/>',
 };
 const ic = (n, s = 20) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -45,7 +57,7 @@ const store = {
 // ---------- state ----------
 const S = {
   code: '', state: null, skew: 0, tz: 'Europe/Berlin', online: true, view: 'loading',
-  plan: null, inside: [], planToday: '', planDay: 0, log: null, logDays: 7, logAll: false, logPage: 'konflikte', times: null, ilford: null, ilAt: 0, ilKey: '', ilBar: '', feed: null,
+  plan: null, inside: [], planToday: '', planDay: 0, log: null, logDays: 7, logAll: false, logPage: 'konflikte', times: null, wxEdit: false, ilford: null, ilAt: 0, ilKey: '', ilBar: '', feed: null,
   noteDraft: '', sheet: null, toast: '', busy: false, loginError: '', loginBusy: false,
   push: { supported: false, perm: 'default', subscribed: false }, installEvent: null, confirmLogout: false,
 };
@@ -84,6 +96,35 @@ function sinceText(ts) {
   return `seit ${when} · ${dur(now() - ts)}`;
 }
 const headerDate = () => { const p = tp(now()); return `${WD[p.wd]}, ${+p.d}. ${MON[+p.mo - 1]} · ${p.h}:${p.mi}`; };
+// ----- weather -----
+const deg = (v) => `${Math.round(v) || 0}°`.replace('-', '−');                       // never "-0°"
+const dec1 = (v) => (v == null ? '' : String(Math.round(v * 10) / 10).replace('.', ','));
+const tc = (v) => `${dec1(v).replace('-', '−')} °C`;
+const KIND = { dry: 'trocken', wet: 'nass', snow: 'Schnee' };
+const wxErr = (c) => ({ network: 'keine Verbindung zum Wetterdienst', timeout: 'Zeitüberschreitung', bad_response: 'unlesbare Antwort', api: 'der Wetterdienst meldet einen Fehler', http_429: 'zu viele Anfragen' })[c] || (/^http_/.test(c || '') ? `Fehler ${c.slice(5)} beim Wetterdienst` : 'unbekannter Fehler');
+// a small icon and the temperature after the date on the main page; tapping opens the details
+const wxChip = () => {
+  const w = S.state.weather;
+  return w ? ` · <button class="wx-chip" data-act="weather" aria-label="Wetter: ${deg(w.temp)}, ${esc(w.text)}. Details öffnen">${ic('w' + w.icon, 16)}<span>${deg(w.temp)}</span></button>` : '';
+};
+// Settings (admins): where the weather is for. Stored rounded to about 1 km, only in the database.
+function wxSettings() {
+  const c = S.state.weatherCfg;
+  if (!c) return '';
+  if (!c.configured || S.wxEdit) {
+    return `<div class="set-row"><div class="tx"><b>Wetter</b><span>${c.configured ? 'Neuen Standort wählen.' : 'Noch nicht eingerichtet. Für Temperatur und Wetter braucht die App den ungefähren Standort. Gespeichert wird er nur auf etwa 1 km genau.'}</span></div></div>
+      <button class="btn ghost" data-act="wxLocate" ${S.busy ? 'disabled' : ''}>${ic('pin')} Meinen Standort übernehmen</button>
+      <div class="field"><label for="wx-coords">Oder Koordinaten eintragen</label><input class="input text" id="wx-coords" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="52.40, 12.50"></div>
+      <span class="small">Tipp: In einer Karten-App den Ort lange antippen und die Zahlen oben kopieren.</span>
+      <button class="btn ghost" data-act="wxSave" ${S.busy ? 'disabled' : ''}>Koordinaten speichern</button>
+      ${c.configured ? '<button class="btn plain" data-act="wxCancel">Abbrechen</button>' : ''}`;
+  }
+  const status = c.err
+    ? `Letzter Abruf fehlgeschlagen (${wxErr(c.err)}).${c.ok ? ` Letzte guten Daten ${feedWhen(c.ok)}.` : ''} Die App versucht es automatisch wieder.`
+    : c.ok ? `Letzter Abruf ${feedWhen(c.ok)}, alles in Ordnung.` : 'Noch kein Abruf.';
+  return `<div class="set-row"><div class="tx"><b>Wetter</b><span>Standort ${dec1(c.lat)}° N, ${dec1(c.lon)}° O (auf etwa 1 km gerundet). ${esc(status)}</span></div></div>
+    <div class="two"><button class="btn ghost" data-act="wxRefresh" ${S.busy ? 'disabled' : ''}>Jetzt abrufen</button><button class="btn ghost" data-act="wxEdit">Standort ändern</button></div>`;
+}
 const durShort = (m) => (m < 60 ? `${m} Min` : `${Math.floor(m / 60)} Std${m % 60 ? ` ${m % 60} Min` : ''}`);
 const hMin = (m) => (m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} h` : `${m} Min`);
 const pctOf = (m) => +((m / 1440) * 100).toFixed(2); // plan strip: 00–24 h
@@ -348,7 +389,7 @@ function todayCard() {
 
 function homeView() {
   return `<div class="scroll"><div class="page">
-    <div class="head"><div class="head-text"><h1>Freigang</h1><p class="sub">${esc(headerDate())}</p></div>
+    <div class="head"><div class="head-text"><h1>Freigang</h1><p class="sub">${esc(headerDate())}${wxChip()}</p></div>
       <button class="icon-btn" data-act="settings" aria-label="Einstellungen">${ic('sliders', 22)}</button></div>
     ${banner()}${ownCard()}${otherCard()}${todayCard()}</div></div>`;
 }
@@ -551,7 +592,7 @@ function ilfordBody(I) {
         ${itile(c.median == null ? '–' : hMin(c.median), 'typischer Ausflug', d?.median, false)}
         ${itile(c.longest ? hMin(c.longest.minutes) : '–', 'längster Ausflug', d?.longest, false)}
       </div>${part}${notes.map((t) => `<p class="small">${t}</p>`).join('')}</section>`;
-  return nums + ilfordBars(I) + ilfordRecords(I);
+  return nums + ilfordBars(I) + ilfordWeather(I) + ilfordRecords(I);
 }
 
 function ilfordBars(I) {
@@ -578,7 +619,7 @@ function ilfordBars(I) {
   }
   const roll = thirty ? `<svg class="iroll" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${segs.map((p) => (p.length > 1 ? `<polyline points="${p.join(' ')}" fill="none" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` : '')).join('')}</svg>` : '';
   const avg = I.avg == null ? '' : `<div class="iavg" style="bottom:${pc(I.avg)}%"><span>Ø ${hMin(I.avg)}</span></div>`;
-  const read = `<p class="iread" aria-live="polite"><b>${sel.partial ? 'Heute' : `${isoLabel(sel.iso)}`}</b> · ${sel.minutes ? `${durShort(sel.minutes)} draußen` : 'nicht draußen'}${sel.outings ? ` · ${sel.outings} ${sel.outings === 1 ? 'Ausflug' : 'Ausflüge'}` : ''}${sel.partial ? ' <span class="small">(bis jetzt)</span>' : ''}${sel.first ? ` <span class="small">(erst ab ${hhmm(I.since.ts)} Uhr erfasst)</span>` : ''}</p>`;
+  const read = `<p class="iread" aria-live="polite"><b>${sel.partial ? 'Heute' : `${isoLabel(sel.iso)}`}</b> · ${sel.minutes ? `${durShort(sel.minutes)} draußen` : 'nicht draußen'}${sel.outings ? ` · ${sel.outings} ${sel.outings === 1 ? 'Ausflug' : 'Ausflüge'}` : ''}${sel.wx ? ` · Ø ${tc(sel.wx.tmean)} (${tc(sel.wx.tmin)} bis ${tc(sel.wx.tmax)})${sel.wx.kind ? `, ${KIND[sel.wx.kind]}` : ''}${sel.wx.complete ? '' : ' <span class="small">(Wetter bis jetzt)</span>'}` : ''}${sel.partial ? ' <span class="small">(bis jetzt)</span>' : ''}${sel.first ? ` <span class="small">(erst ab ${hhmm(I.since.ts)} Uhr erfasst)</span>` : ''}</p>`;
   const legend = `<div class="legend"><span><i style="width:12px;height:12px;border-radius:3px;background:var(--ink)"></i>Zeit draußen</span><span><i class="ib today" style="width:12px;height:12px;border-radius:3px"></i>heute, bis jetzt</span>${I.avg == null ? '' : '<span><i style="width:18px;border-top:2px dashed var(--muted)"></i>Ø pro Tag</span>'}${thirty ? '<span><i style="width:18px;border-top:3px solid var(--out)"></i>7-Tage-Schnitt</span>' : ''}</div>`;
   return `<section class="card" aria-label="Zeit draußen pro Tag" style="gap:8px;padding:16px;border-radius:24px">
       <div style="display:flex;flex-direction:column;gap:3px"><h2 style="font-size:20px">Zeit draußen pro Tag</h2><span class="small">Tippen für Details${I.avg == null ? '' : ' · Ø zählt nur abgeschlossene, ganz erfasste Tage'}</span></div>
@@ -587,6 +628,39 @@ function ilfordBars(I) {
         <div class="igl" style="bottom:100%"><span>${hMin(top)}</span></div><div class="igl" style="bottom:50%"><span>${hMin(top / 2)}</span></div>
         ${avg}<div class="icols">${cols}</div>${roll}</div>
       <div class="ilabels" style="--gap:${gap}px">${labels}</div>${read}</section>`;
+}
+
+// ----- Wetter & Freigang (Ilford page): activity by temperature and by dry/wet/snow, once there are enough days -----
+function ilfordWeather(I) {
+  const W = I.weather, cfg = S.state.weatherCfg;
+  const head = (sub) => `<div style="display:flex;flex-direction:column;gap:3px"><h2 style="font-size:20px">Wetter &amp; Freigang</h2><span class="small">${sub}</span></div>`;
+  const wrap = (inner) => `<section class="card" aria-label="Wetter und Freigang" style="gap:10px;padding:16px;border-radius:24px">${inner}</section>`;
+  if (!W || !W.has) {
+    const text = cfg?.configured
+      ? 'Noch keine Wetterdaten. Der erste Abruf läuft in den nächsten Minuten; ob es geklappt hat, steht in den Einstellungen unter „Wetter“.'
+      : 'Das Wetter ist noch nicht eingerichtet. Mit dem Standort sammelt die App Temperatur und Wetter und holt die Tage seit dem ersten Eintrag nach (höchstens 92 Tage zurück).';
+    return wrap(`${head('Temperatur, Wetter und Zeit draußen')}<p class="small">${text}</p><button class="btn ghost" data-act="settings">${ic('sliders')} Einstellungen öffnen</button>`);
+  }
+  const row = (g) => (g.days ? `<div class="rec"><div><b>${g.label}</b><span>${g.avgMinutes == null
+    ? `erst ${nTage(g.days)}, Zahlen ab ${W.minBandDays} Tagen`
+    : `${nTage(g.days)} · draußen an ${g.withFreigang} % der Tage · ${String(g.avgOutings).replace('.', ',')} ${g.avgOutings === 1 ? 'Ausflug' : 'Ausflüge'} pro Tag`}</span></div><strong>${g.avgMinutes == null ? '–' : `Ø ${hMin(g.avgMinutes)}`}</strong></div>` : '');
+  const bands = W.bands.map(row).join(''), kinds = W.kinds.map(row).join('');
+  let corr;
+  if (W.corr) {
+    const r = W.corr.r, a = Math.abs(r);
+    const word = a < 0.2 ? 'Kaum ein Zusammenhang' : `${a < 0.4 ? 'Schwacher' : a < 0.6 ? 'Mittlerer' : 'Deutlicher'} Zusammenhang`;
+    const dir = r >= 0.2 ? ' An wärmeren Tagen ist Ilford tendenziell länger draußen.' : r <= -0.2 ? ' An kälteren Tagen ist Ilford tendenziell länger draußen.' : '';
+    corr = `<p class="small"><b>${word}</b> zwischen Tagestemperatur und Zeit draußen (Rangkorrelation ${r.toFixed(2).replace('.', ',').replace('-', '−')}, ${W.corr.n} Tage, ${dec1(W.corr.range)} °C Spielraum).${dir} Das ist ein Muster, kein Beweis: Jahreszeit, Tageslicht und Wochentag spielen mit.</p>`;
+  } else {
+    const n = W.need;
+    corr = `<p class="small">Ein Zusammenhang wird berechnet, sobald mindestens ${n.minDays} ausgewertete Tage mit mindestens ${n.minRange} °C Unterschied in der Tagestemperatur vorliegen (jetzt: ${nTage(n.days)}, ${dec1(n.range)} °C).</p>`;
+  }
+  const skipped = W.skipped ? ` ${W.skipped === 1 ? 'Ein Tag fehlt' : `${W.skipped} Tage fehlen`}, weil dort ein Ausflug als unsicher gilt.` : '';
+  return wrap(`${head(`Seit ${W.since.label} gesammelt · ${nTage(W.days)} ausgewertet`)}
+    ${W.days ? `<div class="eyebrow">Nach Tagestemperatur (Tagesmittel)</div><div class="recs">${bands}</div><div class="eyebrow">Nach Wetter</div><div class="recs">${kinds}</div>` : '<p class="small">Noch kein ausgewerteter Tag.</p>'}
+    ${corr}
+    <p class="small">Gezählt werden nur abgeschlossene, ganz erfasste Tage mit lückenlosem Wetter.${skipped} Wetterdaten: Open-Meteo.com (CC BY 4.0), Modell des DWD auf etwa 2 km Raster, keine Messung vor Ort.</p>
+    <button class="btn ghost" data-act="exportDaily">${ic('download')} Tageswerte als CSV</button>`);
 }
 
 function ilfordRecords(I) {
@@ -859,6 +933,14 @@ function sheetHtml() {
       ${sh.error ? `<p class="err" role="alert">${esc(sh.error)}</p>` : ''}
       <button class="btn in sm" data-act="saveNote" ${sh.busy ? 'disabled' : ''}>Speichern</button>
       <button class="btn plain" data-act="closeSheet">Abbrechen</button>`;
+  } else if (sh.type === 'weather') {
+    const w = S.state.weather;
+    title = w ? `${deg(w.temp)} · ${w.text}` : 'Wetter';
+    const facts = w ? [['Gefühlt', w.feels == null ? null : deg(w.feels)], ['Wind', w.wind == null ? null : `${Math.round(w.wind)} km/h`], ['Niederschlag', w.precip == null ? null : `${dec1(w.precip)} mm`]].filter((f) => f[1] != null) : [];
+    inner = `<div style="display:flex;flex-direction:column;gap:4px"><h2 id="sh-t">${esc(title)}</h2><span class="sub">${w ? `Stand ${esc(hhmm(w.at))} Uhr` : 'Gerade keine aktuellen Wetterdaten.'}</span></div>
+      ${facts.length ? `<div class="kvs">${facts.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>` : ''}
+      <p class="small">Wetterdaten: Open-Meteo.com (CC BY 4.0). Berechnet vom Wettermodell des DWD (ICON) auf einem Raster von etwa 2 km, keine Messung direkt vor Ort.</p>
+      <button class="btn plain" data-act="closeSheet">Schließen</button>`;
   } else if (sh.type === 'settings') {
     title = 'Einstellungen';
     const p = S.push, q = S.state.quietHours;
@@ -875,6 +957,7 @@ function sheetHtml() {
       ${feeds() ? `<div class="set-row"><div class="tx"><b>Meldungen beim Füttern</b><span>Benachrichtigt werden, wenn jemand anderes Bonnie füttert.</span></div>
         <button class="sw" role="switch" aria-checked="${S.state.prefs.feedPush}" aria-label="Meldungen beim Füttern" data-act="toggleFeedPush"><i></i></button></div>` : ''}
       ${q.start === q.end ? '' : `<div class="set-row"><div class="tx"><b>Ruhezeit ${q.start}–${q.end} Uhr</b><span>Erinnerungen und Nachfragen pausieren. Meldungen, wenn die andere Katze rausgeht, kommen immer an.</span></div></div>`}
+      ${me().admin ? wxSettings() : ''}
       <p class="small" style="text-align:center">Freigang Version ${VERSION}</p>
       <button class="btn ghost" data-act="logout" style="${S.confirmLogout ? 'border-color:var(--out);color:var(--out-fg)' : ''}">${S.confirmLogout ? 'Wirklich abmelden? Code wird neu gebraucht' : 'Abmelden'}</button>
       <button class="btn plain" data-act="closeSheet">Schließen</button>`;
@@ -1140,6 +1223,37 @@ const A = {
     sh.busy = false; sh.error = 'Das hat nicht geklappt. Bitte nochmal versuchen.'; renderOverlay();
   },
   async export() { await exportCsv(); },
+  async exportDaily() { await exportDailyCsv(); },
+  weather() { openSheet({ type: 'weather' }); },
+  wxEdit() { S.wxEdit = true; render(); },
+  wxCancel() { S.wxEdit = false; render(); },
+  wxLocate() {
+    if (!navigator.geolocation) { toast('Dieses Gerät kann den Standort nicht bestimmen. Bitte Koordinaten eintragen.'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { wxSend({ lat: pos.coords.latitude, lon: pos.coords.longitude }); },
+      (err) => toast(err && err.code === 1 ? 'Der Standort ist nicht erlaubt. Bitte Koordinaten eintragen oder die Erlaubnis in den Geräte-Einstellungen geben.' : 'Der Standort konnte nicht bestimmt werden. Bitte Koordinaten eintragen.'),
+      { timeout: 12000, maximumAge: 600000 },
+    );
+  },
+  async wxSave() {
+    const text = (document.getElementById('wx-coords')?.value || '').trim(); // read what is in the field right now
+    if (!text) { toast('Bitte Koordinaten eintragen, zum Beispiel 52.40, 12.50.'); return; }
+    await wxSend({ text });
+  },
+  async wxRefresh() {
+    if (S.busy) return;
+    S.busy = true; render();
+    try {
+      const r = await api('POST', '/api/weather/refresh');
+      if (r.ok) {
+        applyState(r.data.state); S.ilford = null;
+        const f = r.data.fetched, w = r.data.state.weather;
+        toast(f?.ok ? `Wetter abgerufen${w ? `: ${deg(w.temp)} · ${w.text}` : ''}.` : `Abruf fehlgeschlagen: ${wxErr(f?.error)}.`);
+      } else if (r.status === 429) toast('Bitte kurz warten und noch einmal tippen.');
+      else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+    } catch { toast('Keine Verbindung.'); }
+    S.busy = false; render();
+  },
   async install() { if (S.installEvent) { S.installEvent.prompt(); await S.installEvent.userChoice.catch(() => {}); S.installEvent = null; render(); } },
   async copyCode() {
     try { await navigator.clipboard.writeText(S.code); toast('Code kopiert. In der App einfügen.'); } catch { toast('Kopieren hat nicht geklappt. Notiere dir den Code.'); }
@@ -1147,25 +1261,58 @@ const A = {
   finish() { store.set('onboarded', '1'); S.view = 'home'; render(); refresh(); },
 };
 
+async function wxSend(body) {
+  if (S.busy) return;
+  S.busy = true; render();
+  try {
+    const r = await api('PUT', '/api/weather/location', body);
+    if (r.ok) {
+      applyState(r.data.state); S.wxEdit = false; S.ilford = null;
+      const f = r.data.fetched, w = r.data.state.weather;
+      toast(f?.ok ? `Wetter eingerichtet${w ? `: jetzt ${deg(w.temp)} · ${w.text}` : ''}.` : `Standort gespeichert. Der Abruf hat noch nicht geklappt (${wxErr(f?.error)}); die App versucht es automatisch wieder.`);
+    } else if (r.status === 400) toast('Das sind keine Koordinaten. Beispiel: 52.40, 12.50');
+    else toast('Das hat nicht geklappt. Bitte nochmal versuchen.');
+  } catch { toast('Keine Verbindung.'); }
+  S.busy = false; render();
+}
+
+const csvCell = (v) => { const t = String(v ?? ''); if (/^-\d+(,\d+)?$/.test(t)) return t; /* a negative number, not a formula */ return /[;"\r\n]/.test(t) || /^[=+\-@\t]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+async function shareCsv(csv, name, title) {
+  const file = new File([csv], name, { type: 'text/csv' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+  } else {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+}
+
+// one row per day since the first entry, with the weather of that day (for the own evaluation later)
+async function exportDailyCsv() {
+  try {
+    const r = await api('GET', '/api/ilford/daily');
+    if (!r.ok) throw new Error('export');
+    const lines = ['Datum;Wochentag;Minuten draußen;Ausflüge;Unsicherer Ausflug;Tag vollständig;Temp min °C;Temp max °C;Temp Ø °C;Niederschlag mm;Schnee cm;Sonne Std;Wind max km/h;Böen max km/h;Wetter;Wetterdaten vollständig'];
+    for (const d of r.data.daily) {
+      const w = d.wx;
+      lines.push([d.iso, d.wd, d.minutes, d.outings, d.unsure ? 'ja' : '', d.partial || d.first ? 'nein' : 'ja',
+        w ? dec1(w.tmin) : '', w ? dec1(w.tmax) : '', w ? dec1(w.tmean) : '', w ? dec1(w.precip) : '', w ? dec1(w.snow) : '', w ? dec1(w.sun) : '', w ? dec1(w.wind) : '', w ? dec1(w.gust) : '',
+        w?.kind ? KIND[w.kind] : '', w ? (w.complete ? 'ja' : 'nein') : ''].map(csvCell).join(';'));
+    }
+    await shareCsv('\ufeff' + lines.join('\r\n') + '\r\n', `freigang-tageswerte-${dayKey(now())}.csv`, 'Freigang-Tageswerte');
+  } catch { toast('Export hat nicht geklappt. Bitte nochmal versuchen.'); }
+}
+
 async function exportCsv() {
   try {
     const r = await api('GET', '/api/export?days=90');
     if (!r.ok) throw new Error('export');
     const st = { in: 'drinnen', soon: 'gleich draußen', out: 'draußen' };
     const f = (ts) => { const p = tp(ts); return `${p.y}-${p.mo}-${p.d} ${p.h}:${p.mi}:${p.s}`; };
-    const q = (v) => { const s = String(v ?? ''); return /[;"\r\n]/.test(s) || /^[=+\-@\t]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const lines = ['Zeit;Katze;Status;Vorher;Erfasst von;Eingetragen um;Override;Hinweis;Ursprüngliche Zeit;Angepasst von'];
-    for (const e of r.data.events) lines.push([f(e.ts), CATS[e.cat].name, st[e.status], st[e.prev_status] || '', e.actor, f(e.recorded_at), e.override ? 'ja' : '', e.note || '', e.orig_ts ? f(e.orig_ts) : '', e.edited_by || ''].map(q).join(';'));
-    const csv = '﻿' + lines.join('\r\n') + '\r\n';
-    const name = `freigang-protokoll-${dayKey(now())}.csv`;
-    const file = new File([csv], name, { type: 'text/csv' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: 'Freigang-Protokoll' }); } catch (e) { if (e.name !== 'AbortError') throw e; }
-    } else {
-      const url = URL.createObjectURL(file);
-      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-    }
+    const lines = ['Zeit;Katze;Status;Vorher;Erfasst von;Eingetragen um;Override;Hinweis;Ursprüngliche Zeit;Angepasst von;Temperatur °C;Gefühlt °C;Wetter'];
+    for (const e of r.data.events) lines.push([f(e.ts), CATS[e.cat].name, st[e.status], st[e.prev_status] || '', e.actor, f(e.recorded_at), e.override ? 'ja' : '', e.note || '', e.orig_ts ? f(e.orig_ts) : '', e.edited_by || '', e.wx ? dec1(e.wx.temp) : '', e.wx ? dec1(e.wx.feels) : '', e.wx?.text || ''].map(csvCell).join(';'));
+    await shareCsv('\ufeff' + lines.join('\r\n') + '\r\n', `freigang-protokoll-${dayKey(now())}.csv`, 'Freigang-Protokoll');
   } catch { toast('Export hat nicht geklappt. Bitte nochmal versuchen.'); }
 }
 

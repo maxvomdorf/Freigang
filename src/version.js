@@ -1,2 +1,2 @@
 // Bump together with package.json, public/app.js and public/sw.js (test/version.test.mjs checks that all four agree).
-export const VERSION = '1.9.0';
+export const VERSION = '1.10.0';

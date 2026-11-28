@@ -1,6 +1,6 @@
 {
   "name": "freigang",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "private": true,
   "description": "Freigang: gemeinsamer Drinnen/Draußen-Status und Protokoll für zwei Nachbarskatzen (Ilford und Bonnie). Cloudflare Worker + D1 + Web Push.",
   "type": "module",
@@ -11,7 +11,7 @@
     "deploy": "node scripts/deploy.mjs",
     "links": "node scripts/links.mjs",
     "keys": "node scripts/keys.mjs",
-    "test": "node test/slots.test.mjs && node test/version.test.mjs && node test/note.test.mjs && node test/ilford.test.mjs && node test/times.test.mjs && node test/run.mjs"
+    "test": "node test/slots.test.mjs && node test/version.test.mjs && node test/note.test.mjs && node test/ilford.test.mjs && node test/times.test.mjs && node test/weather.test.mjs && node test/run.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.164.0"
